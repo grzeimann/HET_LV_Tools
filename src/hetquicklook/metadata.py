@@ -4,12 +4,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import date, datetime
-import io
 from pathlib import Path
-import tarfile
 from typing import Any, Mapping
 
-from .discovery import DiscoveredObservation
+from .discovery import ArchiveMember, DiscoveredObservation, inventory_members
 from .instrument import Instrument
 
 
@@ -50,6 +48,7 @@ class ObservationMetadata:
     requested_dec_deg: float | None = None
     observation_time: datetime | str | None = None
     header_values: Mapping[str, Any] = field(default_factory=dict)
+    archive_members: tuple[ArchiveMember, ...] = ()
 
 
 def metadata_from_header(
@@ -57,6 +56,7 @@ def metadata_from_header(
     header: Mapping[str, Any],
     *,
     files: tuple[str, ...] = (),
+    archive_members: tuple[ArchiveMember, ...] = (),
 ) -> ObservationMetadata:
     """Create observation metadata from a FITS-like header mapping.
 
@@ -93,6 +93,7 @@ def metadata_from_header(
         ),
         observation_time=observation_time,
         header_values=dict(header),
+        archive_members=tuple(archive_members),
     )
 
 
@@ -101,10 +102,41 @@ def metadata_from_fits_header(
     header: Mapping[str, Any],
     *,
     files: tuple[str, ...] = (),
+    archive_members: tuple[ArchiveMember, ...] = (),
 ) -> ObservationMetadata:
     """Backward-compatible descriptive alias for :func:`metadata_from_header`."""
 
-    return metadata_from_header(observation, header, files=files)
+    return metadata_from_header(
+        observation,
+        header,
+        files=files,
+        archive_members=archive_members,
+    )
+
+
+def metadata_from_members(
+    observation: DiscoveredObservation,
+    members: tuple[ArchiveMember, ...],
+) -> ObservationMetadata:
+    """Read basic metadata from an existing archive-member inventory.
+
+    Only the first literal FITS member is opened for header metadata. Detector
+    arrays are not loaded here. The complete inventory remains attached to the
+    returned metadata and all member names remain visible in ``files``.
+    """
+
+    from .raw import RawFrameLoader
+
+    header: Mapping[str, Any] = {}
+    first_fits = next((member for member in members if member.is_fits), None)
+    if first_fits is not None:
+        header = RawFrameLoader().read_header(first_fits)
+    return metadata_from_header(
+        observation,
+        header,
+        files=tuple(member.member_name for member in members),
+        archive_members=members,
+    )
 
 
 def metadata_from_archive(observation: DiscoveredObservation) -> ObservationMetadata:
@@ -115,23 +147,4 @@ def metadata_from_archive(observation: DiscoveredObservation) -> ObservationMeta
     failure.
     """
 
-    try:
-        from astropy.io import fits
-    except ImportError as error:  # pragma: no cover - dependency is declared
-        raise RuntimeError("Astropy is required to read FITS metadata") from error
-
-    with tarfile.open(observation.archive_path, mode="r:*") as archive:
-        members = [member for member in archive.getmembers() if member.isfile()]
-        names = tuple(member.name for member in members)
-        for member in members:
-            lower_name = member.name.lower()
-            if not lower_name.endswith((".fits", ".fits.gz", ".fit", ".fit.gz")):
-                continue
-            extracted = archive.extractfile(member)
-            if extracted is None:
-                continue
-            with fits.open(io.BytesIO(extracted.read()), memmap=False) as hdul:
-                return metadata_from_header(
-                    observation, hdul[0].header, files=names
-                )
-    return metadata_from_header(observation, {}, files=names)
+    return metadata_from_members(observation, inventory_members(observation))

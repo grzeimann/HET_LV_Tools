@@ -1,4 +1,6 @@
 from pathlib import Path
+import io
+import tarfile
 
 from hetquicklook.config import QuicklookConfig
 from hetquicklook.discovery import discover_observations
@@ -32,3 +34,19 @@ def test_discovery_can_filter_by_date_and_instrument(tmp_path: Path) -> None:
 
     assert observations[0].archive_path == archive
 
+
+def test_discovery_reports_nested_corral_virus_observations(tmp_path: Path) -> None:
+    date_archive = tmp_path / "20260910.tar"
+    inner = io.BytesIO()
+    with tarfile.open(fileobj=inner, mode="w"):
+        pass
+    with tarfile.open(date_archive, mode="w") as archive:
+        info = tarfile.TarInfo("virus/virus0000001.tar")
+        info.size = len(inner.getvalue())
+        archive.addfile(info, io.BytesIO(inner.getvalue()))
+
+    observations = discover_observations(QuicklookConfig(tmp_path), instrument="virus")
+
+    assert len(observations) == 1
+    assert observations[0].observation_id == "virus0000001"
+    assert observations[0].outer_tar_member == "virus/virus0000001.tar"

@@ -21,7 +21,9 @@ pip install .
 
 The repository's architectural scope and instrument assumptions are described
 in [Architectural_Design.md](Architectural_Design.md). User documentation is
-in [docs/](docs/installation.md).
+in [docs/](docs/installation.md). The implementation status, remaining tasks,
+and open questions are tracked in
+[`docs/implementation_workspace.md`](docs/implementation_workspace.md).
 
 The discovery command can be used before any reduction-specific topology is
 configured:

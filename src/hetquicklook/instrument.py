@@ -8,6 +8,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .discovery import RawFrameIdentity
 
 
 class Instrument(str, Enum):
@@ -72,3 +76,32 @@ def topology_for(instrument: Instrument | str) -> InstrumentTopology:
     """Return the high-level topology for ``instrument``."""
 
     return _TOPOLOGIES[Instrument.from_value(instrument)]
+
+
+_LRS2_CHANNELS = {
+    ("056", "LL"): "UV",
+    ("056", "LU"): "UV",
+    ("056", "RL"): "Orange",
+    ("056", "RU"): "Orange",
+    ("066", "LL"): "Red",
+    ("066", "LU"): "Red",
+    ("066", "RL"): "Far-Red",
+    ("066", "RU"): "Far-Red",
+}
+
+
+def lrs2_channel_for(ifu_slot: str, amplifier: str) -> str | None:
+    """Return the supplied LRS2 slot/amplifier channel mapping.
+
+    This is deliberately a small interpretation layer over the generic raw
+    identity. Unknown tokens return ``None`` rather than being classified by
+    inference.
+    """
+
+    return _LRS2_CHANNELS.get((str(ifu_slot), str(amplifier).upper()))
+
+
+def lrs2_channel_for_identity(identity: RawFrameIdentity) -> str | None:
+    """Interpret an encoded raw identity using the known LRS2 topology."""
+
+    return lrs2_channel_for(identity.ifu_slot, identity.amplifier)
