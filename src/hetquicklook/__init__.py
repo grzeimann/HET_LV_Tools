@@ -32,10 +32,14 @@ from .metadata import (
 from .observation import Exposure, Observation, load_observation
 from .raw import HeaderReadResult, RawFrameData, RawFrameLoader, load_frame
 from .classification import (
+    DEFAULT_STANDARD_STAR_CATALOG_SOURCE,
     ExposureClassification,
     ObjectIntent,
+    STANDARD_STAR_ALIASES,
+    STANDARD_STAR_NAMES,
     StandardStarCatalog,
     classify_exposure,
+    normalize_standard_star_name,
     parse_object_intent,
 )
 from .topology import (
@@ -45,6 +49,7 @@ from .topology import (
     VirusTopologyLoader,
     virus_orientation,
 )
+from .workflows import LRS2_STANDARD_FIDUCIAL
 
 __all__ = [
     "DiscoveredObservation",
@@ -79,14 +84,19 @@ __all__ = [
     "physical_identity_for",
     "ExposureClassification",
     "ObjectIntent",
+    "STANDARD_STAR_NAMES",
+    "STANDARD_STAR_ALIASES",
+    "DEFAULT_STANDARD_STAR_CATALOG_SOURCE",
     "StandardStarCatalog",
     "classify_exposure",
+    "normalize_standard_star_name",
     "parse_object_intent",
     "ConfigurationResourceError",
     "LRS2FiberPositionLoader",
     "TopologyReference",
     "VirusTopologyLoader",
     "virus_orientation",
+    "LRS2_STANDARD_FIDUCIAL",
 ]
 
 __version__ = "0.1.0"

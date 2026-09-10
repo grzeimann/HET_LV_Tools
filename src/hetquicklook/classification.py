@@ -3,9 +3,103 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import FrozenSet
+from typing import FrozenSet, Mapping
 
 from .instrument import Instrument
+
+
+# This is the HET/Hydra table used as the default quick-look catalog.  Keep the
+# spelling here exact: historical Panacea spellings are handled by the
+# explicit alias table below rather than by broad matching.
+STANDARD_STAR_NAMES = frozenset(
+    {
+        "1732526",
+        "1740346",
+        "1743045",
+        "1757132",
+        "1802271",
+        "1805292",
+        "1808347",
+        "1812095",
+        "BD+023375",
+        "BD+174708",
+        "BD+210607",
+        "BD+262606",
+        "BD+292091",
+        "BD+541216",
+        "BD+601753",
+        "FEIGE110",
+        "FEIGE34",
+        "G191B2B",
+        "GD153",
+        "GD71",
+        "GJ754.1A",
+        "GRW+705824",
+        "HD37725",
+        "HD55677",
+        "HD106252",
+        "HD116405",
+        "HD142331",
+        "HD180609",
+        "HD209458",
+        "HS2027+0651",
+        "HZ21",
+        "HZ4",
+        "HZ44",
+        "KF06T2",
+        "KF08T3",
+        "LDS749B",
+        "P177D",
+        "P330E",
+        "SDSSJ151421",
+        "SF1615+001A",
+        "SNAP-2",
+        "WD1026+453",
+        "WD1327-083",
+        "WD1657+343",
+        "WD2341+322",
+    }
+)
+
+
+# Only spellings demonstrated by the supplied historical Panacea list are
+# included.  The mapping is case-insensitive when it is applied, but the
+# published keys retain the historical spelling for inspection.
+STANDARD_STAR_ALIASES = {
+    "HZ_44": "HZ44",
+    "HZ_21": "HZ21",
+    "HZ_4": "HZ4",
+    "FEIGE_34": "FEIGE34",
+    "FEIGE_110": "FEIGE110",
+    "GRW+70_5824": "GRW+705824",
+    "BD+26+2606": "BD+262606",
+    "BD_+17_4708": "BD+174708",
+    "BD_+26_2606": "BD+262606",
+}
+
+_STANDARD_STAR_ALIASES_CASEFOLDED: Mapping[str, str] = {
+    key.casefold(): value for key, value in STANDARD_STAR_ALIASES.items()
+}
+
+
+def normalize_standard_star_name(value: object) -> str | None:
+    """Normalize one explicit standard-star spelling to a canonical name.
+
+    The operation strips surrounding whitespace, applies a case-insensitive
+    lookup in :data:`STANDARD_STAR_ALIASES`, and otherwise returns the
+    spelling unchanged.  It deliberately does not remove punctuation or use
+    substring matching.
+    """
+
+    if value in (None, ""):
+        return None
+    name = str(value).strip()
+    if not name:
+        return None
+    return _STANDARD_STAR_ALIASES_CASEFOLDED.get(name.casefold(), name)
+
+
+DEFAULT_STANDARD_STAR_CATALOG_SOURCE = "HET/Hydra canonical standard-star table"
 
 
 @dataclass(frozen=True)
@@ -66,6 +160,15 @@ class StandardStarCatalog:
         return cls(names=None, source=source)
 
     @classmethod
+    def default(cls) -> "StandardStarCatalog":
+        """Return the static HET/Hydra default catalog."""
+
+        return cls.from_names(
+            STANDARD_STAR_NAMES,
+            source=DEFAULT_STANDARD_STAR_CATALOG_SOURCE,
+        )
+
+    @classmethod
     def from_names(
         cls,
         names: set[str] | frozenset[str] | tuple[str, ...],
@@ -90,7 +193,8 @@ class StandardStarCatalog:
 
         if self.names is None or target is None:
             return None
-        return str(target).strip().casefold() in self.names
+        normalized = normalize_standard_star_name(target)
+        return normalized is not None and normalized.casefold() in self.names
 
 
 @dataclass(frozen=True)
@@ -144,18 +248,18 @@ def classify_exposure(
                 source = "Qth"
                 applicable = ("066",)
 
-    catalog = standard_catalog or StandardStarCatalog.unavailable()
+    catalog = standard_catalog or StandardStarCatalog.default()
     object_intent = parse_object_intent(object_name)
     standard_star: bool | None = None
+    standard_target = normalize_standard_star_name(object_intent.target)
     if normalized_types == {"sci"} and object_intent.target is not None:
-        standard_star = catalog.contains(object_intent.target)
+        standard_star = catalog.contains(standard_target)
     return ExposureClassification(
         quicklook_kind=quicklook_kind,
         calibration_source=source,
         applicable_ifu_slots=applicable,
-        standard_target=object_intent.target,
+        standard_target=standard_target,
         standard_star=standard_star,
         standard_catalog_available=catalog.available,
         standard_catalog_source=catalog.source,
     )
-

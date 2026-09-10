@@ -17,10 +17,10 @@ The repository now has a complete small data-access and representation layer:
 | FITS metadata | [`metadata.py`](../src/hetquicklook/metadata.py) normalizes demonstrated VIRUS exposure and scientific-header fields from all readable headers belonging to one exposure. It retains per-field disagreements and member provenance. | Missing values remain `None`; disagreements are observable and the package does not choose a scientific winner. |
 | Raw loading | [`raw.py`](../src/hetquicklook/raw.py) loads direct or nested FITS members through the primary HDU and returns detector data, header, identity, and archive/member provenance. | Loading is on demand and has no VIRUSFlow cache, timing, index, or database registry. |
 | Instrument interpretation | [`instrument.py`](../src/hetquicklook/instrument.py) retains the high-level hierarchies, encodes the fixed LRS2 component identities, and combines raw tokens with supported VIRUS/LRS2 header identity fields. | Generic raw parsing remains independent of LRS2 interpretation; incomplete VIRUS addresses remain incomplete rather than receiving defaults. |
-| Classification | [`classification.py`](../src/hetquicklook/classification.py) provides right-parsed `OBJECT` intent, deterministic VIRUS/LRS2 flat classification, and an explicit unavailable/loaded standard-star catalog boundary. | No runtime catalog lookup and no historical Panacea standard list are used. |
+| Classification | [`classification.py`](../src/hetquicklook/classification.py) provides right-parsed `OBJECT` intent, deterministic VIRUS/LRS2 flat classification, and the static HET/Hydra standard-star catalog with explicit historical aliases. | Classification is exact after parsing and alias normalization; it does not use broad historical substring matching. |
 | Topology resources | [`topology.py`](../src/hetquicklook/topology.py) loads packaged VIRUS/LRS2 static resources and resolves dated VIRUS/LRS2 traces from an external `trace_root`. | Static resources are package data; dated `Fiber_Locations/` remains independently configured calibration state. |
 | CLI | [`cli.py`](../src/hetquicklook/cli.py) supports `discover --json --inventory` for literal member and identity inspection. | Scientific selection and quick-look execution remain future commands. |
-| Numerical algorithms and workflows | The existing array-based algorithms and in-memory workflows remain unchanged. | They still require detector arrays and authoritative fiber topology as inputs. |
+| Numerical algorithms and workflows | Shared detector preparation, continuum-flat trace fitting, fractional extraction, central-column collapse, and Gaussian-splat spatial reconstruction now operate on loaded arrays and authoritative fiber topology. | They remain in-memory array operations; archive discovery and scientific selection stay outside the algorithms. |
 
 ## Established raw-data contract
 
@@ -116,33 +116,105 @@ The topology boundary is explicit:
 * The same dated trace resolver handles VIRUS and LRS2 identities. The
   external root is the directory containing `Fiber_Locations/`.
 
-## Questions that remain for the next layer
+## Established quick-look numerical path
+
+The next layer now follows the supplied VIRUSFlow/Panacea numerical contracts:
+
+```text
+raw primary-HDU amplifier image
+    -> robust row-wise overscan subtraction and trim
+    -> established amplifier orientation and gain
+    -> detector error/variance
+    -> continuum-flat trace fit from the dated fiber_loc reference
+    -> dense per-fiber detector trace map
+    -> 5-pixel fractional top-hat extraction
+    -> fiber x detector-column spectra
+    -> central 200 detector columns
+    -> one scalar per fiber
+    -> Gaussian-splat IFU-plane image
+```
+
+The detector, trace, and extraction implementations are shared by VIRUS and
+LRS2. Their fiber counts come from the input arrays: VIRUS commonly has 112
+traces per amplifier and LRS2 commonly has 140. Instrument names do not select
+different numerical routines. The documented `504/018/RU` trace exception is
+retained.
+
+Detector preparation uses the established `32 * nx / 1064` overscan scaling,
+row-wise robust subtraction, overscan trimming, the `LU`/`RL` both-axis flip,
+the `AMPNAME=LR` or `UL` column flip, gain multiplication, and the fallback
+values `GAIN=0.85` and `RDNOISE=3.0`. It does not add bias, dark, flat,
+cosmic-ray, scattered-light, or bad-column corrections.
+
+Trace fitting uses 40 detector-column chunks, median profiles, broad
+cross-dispersion background removal, Gaussian smoothing, local maxima,
+three-point parabolic subpixel localization, reference offsets for configured
+dead fibers, and an independent robust polynomial of degree at most 4 per
+fiber. Trace sample positions, sample columns, residuals, residual RMS values,
+valid sample counts, and reference-interpolated state remain available as QA
+arrays.
+
+Extraction uses an exact continuous top-hat aperture with default width 5.0
+detector pixels. Flux uses the fractional overlap weights and diagonal
+variance uses their squares. The initial quick-look workflow uses
+`pixel_mask=None` unless a caller supplies one.
+
+Collapse selects the central 200 detector columns by default, with the width
+configurable and centered on the actual extracted-spectrum width. The current
+`mean` statistic is retained as the explicit default from the existing
+quick-look collapse routine. Confirmation of the final statistic remains open.
+
+Spatial reconstruction uses a local Gaussian splat over authoritative physical
+fiber `(x, y)` positions. The default FWHM is 1.8 arcsec, inherited from
+`make_mosaic_cube_from_fit.py`, and output pixel scale and bounds are explicit
+parameters. Pixels without Gaussian support remain `NaN` with a false support
+mask and zero accumulated weight. The reconstruction has no wavelength,
+multiple-shot, sky, ADR, WCS, or M101-specific quality requirements.
+
+The provisional LRS2 standard-star intended fiducial is `(0, 0)` in the LRS2
+IFU/focal-plane coordinate system. It is retained as documented configuration
+knowledge and awaits explicit verification; it is not silently applied to
+VIRUS. The spatial image and fiber-level values are the product boundary for a
+future measured-centroid estimator.
+
+## Standard-star catalog
+
+The static default catalog is the 45-name HET/Hydra set in
+`hetquicklook.classification.STANDARD_STAR_NAMES`. Classification parses
+`TARGET_IFUSLOT_TRACK` from the right, extracts the target, normalizes only
+explicit historical aliases, and performs exact canonical membership. The
+historical Panacea spellings retained as aliases are `HZ_44`, `HZ_21`, `HZ_4`,
+`FEIGE_34`, `FEIGE_110`, `GRW+70_5824`, `BD+26+2606`, `BD_+17_4708`, and
+`BD_+26_2606`. The underscored spellings are not members of the canonical
+catalog.
+
+## Questions that remain
 
 The following questions remain relevant to the next scientific layer:
 
 | Topic | Question | Why it matters |
 | --- | --- | --- |
-| Standards | What canonical packaged standard-star catalog should be used? | `OBJECT` parsing is implemented, but classification remains explicitly unknown without this catalog. |
-| Detector reduction | What minimal overscan/trim/gain/noise treatment is required before trace sampling? | Raw primary-HDU arrays and supported orientation facts are available; scientific detector preparation is not yet selected. |
-| Extraction | What aperture, trace sampling, weighting, background, and quality rules reproduce the operational signal? | The current extraction code remains a synthetic placeholder. |
-| Collapse | Which detector samples and normalization define an LDLS or standard-star collapsed value? | This determines the diagnostic quantity and units. |
-| Spatial products | How should physical IFU coordinates, gaps, overlaps, missing fibers, and orientation appear in an image? | The existing spatial array operation is not yet a pipeline-backed product. |
-| Pointing | What requested-coordinate convention, centroid estimator, and fiducial rules define the operational offset? | A measured centroid is not meaningful until it shares the requested coordinate system. |
-| Quality and operations | Which bad-pixel, saturation, cosmic-ray, and partial-component conditions should be reported or reject a scientific result? | Raw loading deliberately preserves evidence without making scientific validity decisions. |
+| Collapse statistic | Which explicit statistic should reduce the selected central 200 detector columns to one scalar? | The current `mean` behavior is retained as the default pending scientific confirmation. |
+| Pointing estimator | Which measured-centroid estimator should consume the spatial image or fiber values? | The existing weighted centroid remains a compatibility helper and has no final scientific authority. |
+| Pointing fiducials | Is the LRS2 intended fiducial `(0, 0)` correct, and what is the corresponding VIRUS fiducial? | The LRS2 value is provisional and VIRUS is unresolved. |
+| Spatial defaults | What final pixel scale and image bounds should be operational defaults? | The algorithm accepts explicit values and currently follows the 1 arcsec/pixel script default when none is supplied. |
+| Quality and operations | Which bad-pixel, saturation, cosmic-ray, and partial-component conditions should be reported or reject a scientific result? | Detector, trace, extraction, and spatial support evidence is preserved; thresholds remain deferred. |
 
 ## Tests and completion criteria for this pass
 
 The synthetic suite covers direct and nested archives, deterministic inventory,
 basename parsing, malformed names, primary-header metadata, detector loading,
 provenance, partial observations, multi-exposure metadata, disagreement
-visibility, flat and standard boundaries, fixed LRS2 identities, VIRUS identity
-construction, packaged static topology resources, real dated VIRUS/LRS2 trace
-resolution, and topology loader row/order contracts. The normal suite does not
+visibility, flat and exact standard boundaries, fixed LRS2 identities, VIRUS
+identity construction, packaged static topology resources, real dated
+VIRUS/LRS2 trace resolution, topology loader row/order contracts, detector
+preparation, shared 112/140-fiber trace fitting and extraction, central-column
+collapse, and single-shot Gaussian reconstruction. The normal suite does not
 depend on `~/data`.
 
-This pass is complete when a real VIRUS or LRS2 archive can be discovered,
-inventoried, inspected by encoded identities, represented as an observation,
-and loaded on demand with exposure metadata, deterministic classification,
-instrument identity, and archive/member provenance. Fiber extraction, collapse,
-spatial reconstruction, centroiding, pointing offsets, and quick-look plots
+This layer is complete when a loaded VIRUS or LRS2 amplifier can follow the
+shared detector-to-fiber quick-look path through a spatial image while keeping
+instrument identity, dated trace calibration, and authoritative IFU positions
+separate. Full archive selection, wavelength calibration, sky modeling, DAR,
+production spectrophotometric calibration, and final quality/rejection policy
 remain outside this boundary.

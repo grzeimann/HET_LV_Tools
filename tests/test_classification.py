@@ -41,14 +41,14 @@ def test_flat_classification_does_not_fuzzy_match() -> None:
     assert not result.known
 
 
-def test_standard_classification_is_unknown_without_canonical_catalog() -> None:
+def test_standard_classification_uses_the_static_default_catalog() -> None:
     result = classify_exposure(
         "virus", frame_types=("sci",), object_name="HZ44_056_W"
     )
 
     assert result.standard_target == "HZ44"
-    assert result.standard_star is None
-    assert result.standard_catalog_available is False
+    assert result.standard_star is True
+    assert result.standard_catalog_available is True
 
 
 def test_standard_classification_accepts_explicit_catalog() -> None:
