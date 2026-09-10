@@ -14,7 +14,9 @@ from .instrument import (
     LRS2InstrumentComponent,
     PhysicalAmplifierIdentity,
     InstrumentTopology,
+    lrs2_amplifier_tokens_for_channel,
     lrs2_component_for,
+    lrs2_component_for_channel,
     lrs2_channel_for,
     lrs2_channel_for_identity,
     physical_identity_for,
@@ -50,11 +52,14 @@ from .topology import (
     virus_orientation,
 )
 from .workflows import (
+    LRS2ChannelQuicklook,
     INSTRUMENT_SPATIAL_DEFAULTS,
     LRS2_SPATIAL_DEFAULTS,
     LRS2_STANDARD_FIDUCIAL,
     VIRUS_SPATIAL_DEFAULTS,
     VIRUS_STANDARD_FIDUCIAL,
+    combine_lrs2_channel_products,
+    combine_lrs2_channels,
     spatial_defaults_for,
 )
 
@@ -65,7 +70,9 @@ __all__ = [
     "LRS2InstrumentComponent",
     "PhysicalAmplifierIdentity",
     "InstrumentTopology",
+    "lrs2_amplifier_tokens_for_channel",
     "lrs2_component_for",
+    "lrs2_component_for_channel",
     "ObservationMetadata",
     "ExposureMetadata",
     "MetadataDisagreement",
@@ -108,6 +115,9 @@ __all__ = [
     "VIRUS_SPATIAL_DEFAULTS",
     "LRS2_SPATIAL_DEFAULTS",
     "INSTRUMENT_SPATIAL_DEFAULTS",
+    "LRS2ChannelQuicklook",
+    "combine_lrs2_channel_products",
+    "combine_lrs2_channels",
     "spatial_defaults_for",
 ]
 

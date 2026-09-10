@@ -198,6 +198,28 @@ variance and trace QA remain available from their algorithm results. Exposure
 identity, classification, and physical IFU identity remain available from the
 established observation and topology layers.
 
+For LRS2, the detector-processing unit is one amplifier and the spatial
+quick-look/scientific presentation unit is one channel. Each amplifier first
+produces its independent `SpatialQuicklook`, including detector-coordinate
+evidence. Only after extraction and median collapse are the physical fiber
+positions and collapsed values combined into an `LRS2ChannelQuicklook` and
+passed through the same generic Gaussian splat. The authoritative channel
+pairs are:
+
+| Channel | Amplifiers | Fibers |
+| --- | --- | ---: |
+| UV | `056LL` + `056LU` | 280 |
+| Orange | `056RL` + `056RU` | 280 |
+| Red | `066LL` + `066LU` | 280 |
+| Far-Red | `066RL` + `066RU` | 280 |
+
+`combine_lrs2_channels` composes a complete eight-amplifier exposure into
+these four products. A missing expected amplifier raises an explicit error;
+the package does not manufacture a partial complete channel. For standard
+products the centroid is recomputed from all 280 channel fibers, rather than
+averaging amplifier centroids, and the intended `(0, 0)` fiducial remains
+display evidence without a quality threshold.
+
 The quick-look product is an evidence supply for an observer. It does not emit
 automated warnings, rejection decisions, or quality grades. An observer can
 inspect blocked or dim fibers, illumination structure, missing components,
@@ -217,12 +239,12 @@ catalog.
 
 ## Remaining integration questions
 
-The scientific numerical specification is closed for this quick-look layer.
-The existing weighted centroid is available as a simple measured location; a
-more specialized estimator can be evaluated later if visualization experience
-shows that it is needed. The next implementation layer is assembling archive
-selection, metadata, plotting, and output around the evidence already exposed
-by the array workflows.
+The scientific numerical specification is closed for this quick-look layer,
+including LRS2 channel composition. The existing weighted centroid is
+available as a simple measured location; a more specialized estimator can be
+evaluated later if visualization experience shows that it is needed. The next
+implementation layer is assembling archive selection, metadata, plotting, and
+output around the evidence already exposed by the array workflows.
 
 Quality policy remains deliberately outside the core requirement. The open
 product question is which evidence should be arranged most clearly for an
@@ -240,12 +262,15 @@ identity construction, packaged static topology resources, real dated
 VIRUS/LRS2 trace resolution, topology loader row/order contracts, detector
 preparation, shared 112/140-fiber trace fitting and extraction, median
 central-column collapse, instrument-specific spatial defaults, automatic
-Gaussian-support bounds, fiducial evidence, and single-shot Gaussian
-reconstruction. The normal suite does not depend on `~/data`.
+Gaussian-support bounds, fiducial evidence, single-shot Gaussian
+reconstruction, and LRS2 two-amplifier channel composition. The normal suite
+does not depend on `~/data`.
 
 This layer is complete when a loaded VIRUS or LRS2 amplifier can follow the
-shared detector-to-fiber quick-look path through a spatial image while keeping
-instrument identity, dated trace calibration, and authoritative IFU positions
-separate. Full archive selection, wavelength calibration, sky modeling, DAR,
-production spectrophotometric calibration, seeing estimation, and automated
-quality/rejection policy remain outside this boundary.
+shared detector-to-fiber quick-look path through a spatial image, and a
+complete LRS2 exposure can compose its eight amplifier products into four
+channel images while keeping instrument identity, dated trace calibration,
+and authoritative IFU positions separate. Full archive selection, wavelength
+calibration, sky modeling, DAR, production spectrophotometric calibration,
+seeing estimation, and automated quality/rejection policy remain outside this
+boundary.

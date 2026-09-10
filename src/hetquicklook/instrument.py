@@ -174,6 +174,23 @@ def lrs2_channel_for(ifu_slot: str, amplifier: str) -> str | None:
     return component.name if component is not None else None
 
 
+def lrs2_component_for_channel(channel: str) -> LRS2InstrumentComponent:
+    """Return the authoritative component definition for an LRS2 channel."""
+
+    normalized = str(channel).strip().casefold()
+    for component in _LRS2_COMPONENTS:
+        if normalized in {component.name.casefold(), component.resource_key.casefold()}:
+            return component
+    raise ValueError(f"Unknown LRS2 channel: {channel!r}")
+
+
+def lrs2_amplifier_tokens_for_channel(channel: str) -> tuple[str, ...]:
+    """Return the fixed raw amplifier tokens belonging to an LRS2 channel."""
+
+    component = lrs2_component_for_channel(channel)
+    return tuple(component.ifu_slot + amplifier for amplifier in component.amplifiers)
+
+
 def lrs2_channel_for_identity(identity: RawFrameIdentity) -> str | None:
     """Interpret an encoded raw identity using the known LRS2 topology."""
 

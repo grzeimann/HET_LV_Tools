@@ -18,7 +18,11 @@ from .algorithms.collapse import (
 from .algorithms.extraction import extract_fractional_aperture
 from .algorithms.spatial import gaussian_splat
 from .fibers import FiberTopology
-from .instrument import Instrument
+from .instrument import (
+    Instrument,
+    lrs2_amplifier_tokens_for_channel,
+    lrs2_component_for_channel,
+)
 
 
 VIRUS_SPATIAL_DEFAULTS = {
@@ -91,6 +95,56 @@ class PointingQuicklook(SpatialQuicklook):
         return (
             self.measured_centroid.x - self.requested_position[0],
             self.measured_centroid.y - self.requested_position[1],
+        )
+
+
+@dataclass(frozen=True)
+class LRS2ChannelQuicklook:
+    """Spatial evidence for one complete two-amplifier LRS2 channel.
+
+    The component products retain the detector, trace, extraction, and
+    amplifier-specific evidence.  The channel-level arrays begin only after
+    each amplifier has been reduced to collapsed fiber values and physical
+    IFU positions.
+    """
+
+    channel: str
+    amplifier_products: Mapping[str, SpatialQuicklook]
+    fiber_positions: np.ndarray
+    fiber_values: np.ndarray
+    image: np.ndarray
+    spatial_x_coordinates: np.ndarray
+    spatial_y_coordinates: np.ndarray
+    spatial_support: np.ndarray
+    spatial_weight: np.ndarray
+    intended_fiducial: tuple[float, float]
+    measured_centroid: Centroid | None
+    spatial_gaussian_fwhm_arcsec: float
+    spatial_pixel_scale_arcsec: float
+    fiber_errors: np.ndarray | None = None
+    spatial_variance: np.ndarray | None = None
+
+    @property
+    def gaussian_fwhm_arcsec(self) -> float:
+        """Return the configured Gaussian FWHM using the short result name."""
+
+        return self.spatial_gaussian_fwhm_arcsec
+
+    @property
+    def pixel_scale_arcsec(self) -> float:
+        """Return the configured output pixel scale using the short name."""
+
+        return self.spatial_pixel_scale_arcsec
+
+    @property
+    def offset(self) -> tuple[float, float] | None:
+        """Return measured-minus-intended position when a centroid exists."""
+
+        if self.measured_centroid is None:
+            return None
+        return (
+            self.measured_centroid.x - self.intended_fiducial[0],
+            self.measured_centroid.y - self.intended_fiducial[1],
         )
 
 
@@ -420,3 +474,226 @@ def run_standard_star_quicklook(
         effective_aperture_width=spatial.effective_aperture_width,
         extraction_valid=spatial.extraction_valid,
     )
+
+
+def _canonical_lrs2_channel_products(
+    channel: str,
+    amplifier_products: Mapping[str, SpatialQuicklook],
+) -> tuple[str, dict[str, SpatialQuicklook]]:
+    """Validate and order the two products belonging to ``channel``."""
+
+    component = lrs2_component_for_channel(channel)
+    expected_tokens = lrs2_amplifier_tokens_for_channel(component.name)
+    expected_set = set(expected_tokens)
+    normalized: dict[str, SpatialQuicklook] = {}
+
+    for supplied_key, product in amplifier_products.items():
+        key = str(supplied_key).strip().upper()
+        candidates = [token for token in expected_tokens if key == token]
+        # The full token is the normal interface.  Accepting the two-letter
+        # suffix is useful for direct in-memory calls, but only within the
+        # already selected channel so it cannot infer a cross-slot pairing.
+        if not candidates:
+            candidates = [token for token in expected_tokens if key == token[-2:]]
+        if len(candidates) != 1:
+            raise ValueError(
+                f"Amplifier {supplied_key!r} does not belong uniquely to LRS2 "
+                f"channel {component.name!r}; expected {expected_tokens}"
+            )
+        token = candidates[0]
+        if token in normalized:
+            raise ValueError(f"Duplicate LRS2 amplifier product for {token}")
+        if not isinstance(product, SpatialQuicklook):
+            raise TypeError("amplifier_products must contain SpatialQuicklook results")
+        if product.instrument is not None and Instrument.from_value(product.instrument) is not Instrument.LRS2:
+            raise ValueError(f"LRS2 channel product {token} has non-LRS2 instrument")
+        normalized[token] = product
+
+    missing = [token for token in expected_tokens if token not in normalized]
+    if missing:
+        raise ValueError(
+            f"Cannot create complete LRS2 channel {component.name!r}; "
+            f"missing amplifier product(s): {', '.join(missing)}"
+        )
+    if set(normalized) != expected_set:
+        raise ValueError(
+            f"LRS2 channel {component.name!r} received an unexpected amplifier pair"
+        )
+    return component.name, {token: normalized[token] for token in expected_tokens}
+
+
+def _channel_product_arrays(
+    amplifier_token: str,
+    product: SpatialQuicklook,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray | None]:
+    """Return position/value/error arrays in the product's fiber order."""
+
+    fiber_ids = tuple(product.fiber_values)
+    if set(fiber_ids) != set(product.fiber_positions):
+        raise ValueError(
+            f"LRS2 amplifier product {amplifier_token} has mismatched fiber "
+            "value and position identifiers"
+        )
+    if len(fiber_ids) != 140:
+        raise ValueError(
+            f"LRS2 amplifier product {amplifier_token} must contain 140 fibers; "
+            f"found {len(fiber_ids)}"
+        )
+    positions = np.asarray(
+        [product.fiber_positions[fiber_id] for fiber_id in fiber_ids], dtype=float
+    )
+    values = np.asarray(
+        [product.fiber_values[fiber_id] for fiber_id in fiber_ids], dtype=float
+    )
+    if positions.shape != (140, 2) or values.shape != (140,):
+        raise ValueError(
+            f"LRS2 amplifier product {amplifier_token} has invalid fiber array shapes"
+        )
+
+    errors: np.ndarray | None = None
+    if product.fiber_errors and set(product.fiber_errors) == set(fiber_ids):
+        errors = np.asarray(
+            [product.fiber_errors[fiber_id] for fiber_id in fiber_ids], dtype=float
+        )
+    return positions, values, errors
+
+
+def combine_lrs2_channel_products(
+    channel: str,
+    amplifier_products: Mapping[str, SpatialQuicklook],
+    *,
+    gaussian_fwhm_arcsec: float | None = None,
+    pixel_scale_arcsec: float | None = None,
+    output_shape: tuple[int, int] | None = None,
+    origin: tuple[float, float] | None = None,
+) -> LRS2ChannelQuicklook:
+    """Combine two independently reduced LRS2 amplifiers into one channel.
+
+    Composition begins at the collapsed physical-fiber boundary.  The
+    detector arrays, traces, extracted spectra, and detector variances remain
+    available only on the two underlying :class:`SpatialQuicklook` products.
+    """
+
+    canonical_channel, products = _canonical_lrs2_channel_products(
+        channel, amplifier_products
+    )
+    positions_and_values = [
+        _channel_product_arrays(token, products[token])
+        for token in products
+    ]
+    positions = np.concatenate(
+        [item[0] for item in positions_and_values], axis=0
+    )
+    values = np.concatenate([item[1] for item in positions_and_values], axis=0)
+    errors_by_amp = [item[2] for item in positions_and_values]
+    errors = (
+        np.concatenate([error for error in errors_by_amp if error is not None], axis=0)
+        if all(error is not None for error in errors_by_amp)
+        else None
+    )
+    if positions.shape != (280, 2) or values.shape != (280,):
+        raise ValueError(
+            f"A complete LRS2 channel must contain 280 fibers; found {values.size}"
+        )
+
+    defaults = spatial_defaults_for(Instrument.LRS2)
+    resolved_fwhm = (
+        float(defaults["gaussian_fwhm_arcsec"])
+        if gaussian_fwhm_arcsec is None
+        else float(gaussian_fwhm_arcsec)
+    )
+    resolved_pixel_scale = (
+        float(defaults["pixel_scale_arcsec"])
+        if pixel_scale_arcsec is None
+        else float(pixel_scale_arcsec)
+    )
+    intended = tuple(defaults["intended_fiducial"])
+    spatial = gaussian_splat(
+        positions,
+        values,
+        errors,
+        fwhm=resolved_fwhm,
+        pixel_scale=resolved_pixel_scale,
+        output_shape=output_shape,
+        origin=origin,
+    )
+
+    pointing_products = [isinstance(product, PointingQuicklook) for product in products.values()]
+    if any(pointing_products) and not all(pointing_products):
+        raise TypeError(
+            "LRS2 channel products must all be standard-star or all be flat products"
+        )
+    measured = (
+        weighted_centroid(positions[:, 0], positions[:, 1], values)
+        if all(pointing_products)
+        else None
+    )
+    return LRS2ChannelQuicklook(
+        channel=canonical_channel,
+        amplifier_products=products,
+        fiber_positions=positions,
+        fiber_values=values,
+        image=spatial.image,
+        spatial_x_coordinates=spatial.x_coordinates,
+        spatial_y_coordinates=spatial.y_coordinates,
+        spatial_support=spatial.support,
+        spatial_weight=spatial.weight,
+        intended_fiducial=(float(intended[0]), float(intended[1])),
+        measured_centroid=measured,
+        spatial_gaussian_fwhm_arcsec=resolved_fwhm,
+        spatial_pixel_scale_arcsec=resolved_pixel_scale,
+        fiber_errors=errors,
+        spatial_variance=spatial.variance,
+    )
+
+
+def combine_lrs2_channels(
+    amplifier_products: Mapping[str, SpatialQuicklook],
+    *,
+    gaussian_fwhm_arcsec: float | None = None,
+    pixel_scale_arcsec: float | None = None,
+    output_shape: tuple[int, int] | None = None,
+    origin: tuple[float, float] | None = None,
+) -> dict[str, LRS2ChannelQuicklook]:
+    """Combine a complete eight-amplifier LRS2 exposure into four channels.
+
+    The function requires all eight authoritative amplifier tokens.  Missing
+    data therefore remain explicit instead of being represented as a partial
+    channel with an apparently complete result type.
+    """
+
+    expected_tokens = {
+        token
+        for channel in ("UV", "Orange", "Red", "Far-Red")
+        for token in lrs2_amplifier_tokens_for_channel(channel)
+    }
+    canonical_products: dict[str, SpatialQuicklook] = {}
+    for supplied_key, product in amplifier_products.items():
+        token = str(supplied_key).strip().upper()
+        if token in canonical_products:
+            raise ValueError(f"Duplicate LRS2 amplifier product for {token}")
+        canonical_products[token] = product
+    supplied_tokens = set(canonical_products)
+    missing = sorted(expected_tokens - supplied_tokens)
+    unexpected = sorted(supplied_tokens - expected_tokens)
+    if missing:
+        raise ValueError(
+            "Cannot create complete LRS2 channel set; missing amplifier product(s): "
+            + ", ".join(missing)
+        )
+    if unexpected:
+        raise ValueError(
+            "Unexpected amplifier product(s) for LRS2 channel set: "
+            + ", ".join(unexpected)
+        )
+    return {
+        channel: combine_lrs2_channel_products(
+            channel,
+            {token: canonical_products[token] for token in lrs2_amplifier_tokens_for_channel(channel)},
+            gaussian_fwhm_arcsec=gaussian_fwhm_arcsec,
+            pixel_scale_arcsec=pixel_scale_arcsec,
+            output_shape=output_shape,
+            origin=origin,
+        )
+        for channel in ("UV", "Orange", "Red", "Far-Red")
+    }

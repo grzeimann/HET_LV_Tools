@@ -49,3 +49,32 @@ spatial settings used to make the image.
 The workflows do not read files or select observations. Those responsibilities
 belong to discovery and higher-level operational code, keeping the numerical
 contracts easy to test with arrays.
+
+## LRS2 channel products
+
+An LRS2 amplifier remains the detector-processing unit. The existing workflow
+returns one `SpatialQuicklook` per amplifier, retaining its detector, trace,
+extraction, variance, and collapse evidence. An LRS2 channel is the spatial
+quick-look unit formed from two independently processed amplifier products:
+
+| Channel | Amplifiers | Fibers |
+| --- | --- | ---: |
+| UV | `056LL` + `056LU` | 280 |
+| Orange | `056RL` + `056RU` | 280 |
+| Red | `066LL` + `066LU` | 280 |
+| Far-Red | `066RL` + `066RU` | 280 |
+
+`combine_lrs2_channel_products` performs this composition only after each
+amplifier has reached its collapsed fiber values and authoritative physical
+IFU positions. It concatenates those position/value arrays and calls the same
+instrument-agnostic Gaussian-splat algorithm once for the complete channel.
+The two amplifier products remain attached to the resulting
+`LRS2ChannelQuicklook`, so detector-coordinate evidence is not lost or merged.
+
+`combine_lrs2_channels` applies the authoritative pairs and returns the four
+channel products for a complete eight-amplifier LRS2 exposure. Both helpers
+require the expected data; missing amplifiers raise a clear error rather than
+being represented as a complete 280-fiber channel. Standard-star channel
+centroids are recomputed from all 280 physical fibers using the existing
+weighted-centroid measurement and remain evidence without an automatic quality
+decision.

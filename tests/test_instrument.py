@@ -3,6 +3,7 @@ import pytest
 from hetquicklook.discovery import parse_member_identity
 from hetquicklook.instrument import (
     Instrument,
+    lrs2_amplifier_tokens_for_channel,
     lrs2_channel_for_identity,
     lrs2_component_for,
     physical_identity_for,
@@ -59,6 +60,13 @@ def test_lrs2_all_amp_channel_pairs_are_fixed() -> None:
         ("066", "RU"): "Far-Red",
     }
     assert {pair: lrs2_channel_for_identity(parse_member_identity(f"x_{pair[0]}{pair[1]}_flt.fits")) for pair in expected} == expected
+
+
+def test_lrs2_channel_amplifier_tokens_are_authoritative() -> None:
+    assert lrs2_amplifier_tokens_for_channel("UV") == ("056LL", "056LU")
+    assert lrs2_amplifier_tokens_for_channel("Orange") == ("056RL", "056RU")
+    assert lrs2_amplifier_tokens_for_channel("Red") == ("066LL", "066LU")
+    assert lrs2_amplifier_tokens_for_channel("Far-Red") == ("066RL", "066RU")
 
 
 def test_virus_identity_uses_supported_header_fields() -> None:
