@@ -12,6 +12,7 @@ from .results import AlgorithmResult
 
 
 DEFAULT_COLLAPSE_COLUMNS = 200
+DEFAULT_COLLAPSE_STATISTIC = "median"
 
 
 def _central_column_bounds(n_columns: int, requested: int) -> tuple[int, int]:
@@ -70,14 +71,13 @@ def collapse_extracted_spectra(
     variance: np.ndarray | None = None,
     *,
     collapse_columns: int = DEFAULT_COLLAPSE_COLUMNS,
-    statistic: str = "mean",
+    statistic: str = DEFAULT_COLLAPSE_STATISTIC,
 ) -> AlgorithmResult:
     """Collapse extracted ``(fiber, detector-column)`` spectra spatially.
 
-    The default retains the current quick-look ``mean`` statistic after
-    selecting the central 200 detector columns.  The statistic is explicit so
-    that the remaining scientific choice can be changed without changing
-    column selection or extraction.
+    The quick-look default is the finite-value median of the central 200
+    detector columns.  The statistic remains explicit so callers can select a
+    different reduction without changing column selection or extraction.
     """
 
     values = np.asarray(spectra, dtype=float)
@@ -132,7 +132,9 @@ collapse_spectra = collapse_extracted_spectra
 collapse_fiber_spectra = collapse_extracted_spectra
 
 
-def collapse_fiber_signal(signal: np.ndarray, *, statistic: str = "mean") -> float:
+def collapse_fiber_signal(
+    signal: np.ndarray, *, statistic: str = DEFAULT_COLLAPSE_STATISTIC
+) -> float:
     """Collapse one extracted fiber signal to a scalar.
 
     ``NaN`` and infinite values are ignored. If no finite values remain,
@@ -157,7 +159,7 @@ def collapse_fibers(
     topology: FiberTopology,
     *,
     aperture: int = 1,
-    statistic: str = "mean",
+    statistic: str = DEFAULT_COLLAPSE_STATISTIC,
 ) -> dict[str, float]:
     """Extract and collapse every fiber in an amplifier topology."""
 

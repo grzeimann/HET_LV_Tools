@@ -49,7 +49,14 @@ from .topology import (
     VirusTopologyLoader,
     virus_orientation,
 )
-from .workflows import LRS2_STANDARD_FIDUCIAL
+from .workflows import (
+    INSTRUMENT_SPATIAL_DEFAULTS,
+    LRS2_SPATIAL_DEFAULTS,
+    LRS2_STANDARD_FIDUCIAL,
+    VIRUS_SPATIAL_DEFAULTS,
+    VIRUS_STANDARD_FIDUCIAL,
+    spatial_defaults_for,
+)
 
 __all__ = [
     "DiscoveredObservation",
@@ -97,6 +104,11 @@ __all__ = [
     "VirusTopologyLoader",
     "virus_orientation",
     "LRS2_STANDARD_FIDUCIAL",
+    "VIRUS_STANDARD_FIDUCIAL",
+    "VIRUS_SPATIAL_DEFAULTS",
+    "LRS2_SPATIAL_DEFAULTS",
+    "INSTRUMENT_SPATIAL_DEFAULTS",
+    "spatial_defaults_for",
 ]
 
 __version__ = "0.1.0"

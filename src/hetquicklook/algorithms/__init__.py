@@ -3,6 +3,7 @@
 from .centroid import Centroid, centroid_2d, weighted_centroid
 from .collapse import (
     DEFAULT_COLLAPSE_COLUMNS,
+    DEFAULT_COLLAPSE_STATISTIC,
     collapse_fiber_signal,
     collapse_fibers,
     collapse_extracted_spectra,
@@ -38,6 +39,7 @@ __all__ = [
     "AlgorithmResult",
     "SpatialReconstructionResult",
     "DEFAULT_COLLAPSE_COLUMNS",
+    "DEFAULT_COLLAPSE_STATISTIC",
     "DEFAULT_GAIN",
     "DEFAULT_READ_NOISE",
     "DEFAULT_GAUSSIAN_FWHM_ARCSEC",

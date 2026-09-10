@@ -163,8 +163,27 @@ def test_collapse_selects_central_columns_and_keeps_statistic_explicit() -> None
         [[3.0, 4.0, 5.0]],
     )
     result = collapse_extracted_spectra(spectra, collapse_columns=200)
+    assert result.scalars["collapse_statistic"] == "median"
+    np.testing.assert_allclose(result.get_array("fiber_values"), np.median(selected, axis=1))
+
+
+def test_collapse_default_is_finite_median_and_width_remains_configurable() -> None:
+    spectra = np.full((1, 8), np.nan)
+    spectra[0, 2:6] = [1.0, 2.0, 100.0, 4.0]
+    result = collapse_extracted_spectra(spectra, collapse_columns=4)
+
+    assert result.get_array("selected_spectra").shape == (1, 4)
+    assert result.get_array("fiber_values")[0] == 3.0
+    assert result.scalars["collapse_columns_selected"] == 4
+
+
+def test_collapse_alternate_statistics_remain_explicit() -> None:
+    spectra = np.array([[1.0, 2.0, 100.0, 4.0]])
+    result = collapse_extracted_spectra(
+        spectra, collapse_columns=4, statistic="mean"
+    )
     assert result.scalars["collapse_statistic"] == "mean"
-    np.testing.assert_allclose(result.get_array("fiber_values"), np.mean(selected, axis=1))
+    assert result.get_array("fiber_values")[0] == pytest.approx(26.75)
 
 
 def test_gaussian_splat_normalizes_one_shot_values_and_exposes_support() -> None:

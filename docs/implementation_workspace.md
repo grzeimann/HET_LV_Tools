@@ -160,22 +160,49 @@ variance uses their squares. The initial quick-look workflow uses
 `pixel_mask=None` unless a caller supplies one.
 
 Collapse selects the central 200 detector columns by default, with the width
-configurable and centered on the actual extracted-spectrum width. The current
-`mean` statistic is retained as the explicit default from the existing
-quick-look collapse routine. Confirmation of the final statistic remains open.
+configurable and centered on the actual extracted-spectrum width. The default
+statistic is the finite-value `median` (equivalent to `np.nanmedian` over the
+selected window). Explicit `mean` and `sum` alternatives remain available.
 
 Spatial reconstruction uses a local Gaussian splat over authoritative physical
-fiber `(x, y)` positions. The default FWHM is 1.8 arcsec, inherited from
-`make_mosaic_cube_from_fit.py`, and output pixel scale and bounds are explicit
-parameters. Pixels without Gaussian support remain `NaN` with a false support
-mask and zero accumulated weight. The reconstruction has no wavelength,
-multiple-shot, sky, ADR, WCS, or M101-specific quality requirements.
+fiber `(x, y)` positions. The quick-look workflow selects these instrument
+defaults before calling the instrument-agnostic algorithm:
 
-The provisional LRS2 standard-star intended fiducial is `(0, 0)` in the LRS2
-IFU/focal-plane coordinate system. It is retained as documented configuration
-knowledge and awaits explicit verification; it is not silently applied to
-VIRUS. The spatial image and fiber-level values are the product boundary for a
-future measured-centroid estimator.
+| Instrument | Gaussian FWHM | Pixel scale | Standard-star fiducial |
+| --- | ---: | ---: | --- |
+| VIRUS | 1.5 arcsec | 1.0 arcsec/pixel | `(0, 0)` within the selected IFU |
+| LRS2 | 1.2 arcsec | 0.4 arcsec/pixel | `(0, 0)` within the LRS2 IFU |
+
+The algorithm converts FWHM to pixel sigma as
+`FWHM / 2.35 / pixel_scale`. Both values remain explicit workflow parameters,
+so a future measured-seeing value can be supplied as a FWHM override without
+changing the reconstruction algorithm. No seeing estimation or header-driven
+selection is implemented.
+
+When no output grid or coordinate bounds are supplied, the spatial algorithm
+derives each axis from the finite authoritative fiber-coordinate extent and
+pads it by the configured Gaussian support radius. This keeps meaningful
+support away from the image edge. Explicit bounds and output shapes remain
+available as caller overrides. Pixels without Gaussian support remain `NaN`
+with a false support mask and zero accumulated weight.
+
+The standard-star workflow records the intended `(0, 0)` fiducial and exposes
+the existing weighted centroid as a measured position. The measured position
+is evidence for display and review; the package makes no pointing or data
+quality judgment from the separation between the two positions.
+
+The spatial product retains the collapsed fiber values, authoritative spatial
+coordinates, image coordinates, Gaussian weight/support, extracted spectra,
+extraction variance, aperture coverage, and extraction-valid state. Detector
+variance and trace QA remain available from their algorithm results. Exposure
+identity, classification, and physical IFU identity remain available from the
+established observation and topology layers.
+
+The quick-look product is an evidence supply for an observer. It does not emit
+automated warnings, rejection decisions, or quality grades. An observer can
+inspect blocked or dim fibers, illumination structure, missing components,
+trace behavior, pointing displacement, and spatial support. Objective
+thresholds can be added later if operational experience justifies them.
 
 ## Standard-star catalog
 
@@ -188,17 +215,20 @@ historical Panacea spellings retained as aliases are `HZ_44`, `HZ_21`, `HZ_4`,
 `BD_+26_2606`. The underscored spellings are not members of the canonical
 catalog.
 
-## Questions that remain
+## Remaining integration questions
 
-The following questions remain relevant to the next scientific layer:
+The scientific numerical specification is closed for this quick-look layer.
+The existing weighted centroid is available as a simple measured location; a
+more specialized estimator can be evaluated later if visualization experience
+shows that it is needed. The next implementation layer is assembling archive
+selection, metadata, plotting, and output around the evidence already exposed
+by the array workflows.
 
-| Topic | Question | Why it matters |
-| --- | --- | --- |
-| Collapse statistic | Which explicit statistic should reduce the selected central 200 detector columns to one scalar? | The current `mean` behavior is retained as the default pending scientific confirmation. |
-| Pointing estimator | Which measured-centroid estimator should consume the spatial image or fiber values? | The existing weighted centroid remains a compatibility helper and has no final scientific authority. |
-| Pointing fiducials | Is the LRS2 intended fiducial `(0, 0)` correct, and what is the corresponding VIRUS fiducial? | The LRS2 value is provisional and VIRUS is unresolved. |
-| Spatial defaults | What final pixel scale and image bounds should be operational defaults? | The algorithm accepts explicit values and currently follows the 1 arcsec/pixel script default when none is supplied. |
-| Quality and operations | Which bad-pixel, saturation, cosmic-ray, and partial-component conditions should be reported or reject a scientific result? | Detector, trace, extraction, and spatial support evidence is preserved; thresholds remain deferred. |
+Quality policy remains deliberately outside the core requirement. The open
+product question is which evidence should be arranged most clearly for an
+observer to assess instrument health and pointing. Automated warning,
+rejection, and quality-grade thresholds are deferred until operational use
+provides an objective basis for them.
 
 ## Tests and completion criteria for this pass
 
@@ -208,13 +238,14 @@ provenance, partial observations, multi-exposure metadata, disagreement
 visibility, flat and exact standard boundaries, fixed LRS2 identities, VIRUS
 identity construction, packaged static topology resources, real dated
 VIRUS/LRS2 trace resolution, topology loader row/order contracts, detector
-preparation, shared 112/140-fiber trace fitting and extraction, central-column
-collapse, and single-shot Gaussian reconstruction. The normal suite does not
-depend on `~/data`.
+preparation, shared 112/140-fiber trace fitting and extraction, median
+central-column collapse, instrument-specific spatial defaults, automatic
+Gaussian-support bounds, fiducial evidence, and single-shot Gaussian
+reconstruction. The normal suite does not depend on `~/data`.
 
 This layer is complete when a loaded VIRUS or LRS2 amplifier can follow the
 shared detector-to-fiber quick-look path through a spatial image while keeping
 instrument identity, dated trace calibration, and authoritative IFU positions
 separate. Full archive selection, wavelength calibration, sky modeling, DAR,
-production spectrophotometric calibration, and final quality/rejection policy
-remain outside this boundary.
+production spectrophotometric calibration, seeing estimation, and automated
+quality/rejection policy remain outside this boundary.

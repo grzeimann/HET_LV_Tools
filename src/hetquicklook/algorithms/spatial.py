@@ -9,6 +9,9 @@ import numpy as np
 from .results import SpatialReconstructionResult
 
 
+# These values keep direct low-level array calls backwards compatible. The
+# quick-look workflows resolve instrument-specific values before calling this
+# instrument-agnostic routine.
 DEFAULT_GAUSSIAN_FWHM_ARCSEC = 1.8
 DEFAULT_PIXEL_SCALE_ARCSEC = 1.0
 DEFAULT_SUPPORT_SIGMA = 2.0
@@ -35,8 +38,14 @@ def _requested_grid(
     origin: tuple[float, float] | None,
     x_bounds: Sequence[float] | None,
     y_bounds: Sequence[float] | None,
+    padding: float,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Resolve output coordinate arrays from explicit bounds or positions."""
+    """Resolve output coordinate arrays from explicit bounds or positions.
+
+    Automatically inferred bounds include the requested Gaussian support
+    radius around the authoritative fiber-coordinate extent. Explicit bounds
+    remain an intentional override and are used as supplied.
+    """
 
     finite_positions = positions[np.all(np.isfinite(positions), axis=1)]
     if output_shape is not None:
@@ -52,8 +61,8 @@ def _requested_grid(
         if finite_positions.size == 0:
             raise ValueError("positions must contain finite coordinates when no grid is supplied")
         x = _coordinate_grid(
-            float(np.min(finite_positions[:, 0])),
-            float(np.max(finite_positions[:, 0])),
+            float(np.min(finite_positions[:, 0])) - padding,
+            float(np.max(finite_positions[:, 0])) + padding,
             pixel_scale,
         )
     else:
@@ -64,8 +73,8 @@ def _requested_grid(
         if finite_positions.size == 0:
             raise ValueError("positions must contain finite coordinates when no grid is supplied")
         y = _coordinate_grid(
-            float(np.min(finite_positions[:, 1])),
-            float(np.max(finite_positions[:, 1])),
+            float(np.min(finite_positions[:, 1])) - padding,
+            float(np.max(finite_positions[:, 1])) + padding,
             pixel_scale,
         )
     else:
@@ -97,9 +106,7 @@ def gaussian_splat(
         errors: Optional one-sigma error per fiber. Formal image variance is
             returned only at pixels whose contributing fibers all have finite
             errors.
-        fwhm: Gaussian FWHM in the coordinate units of the supplied positions;
-            the initial quick-look default is 1.8 arcsec from the supplied
-            M101 reconstruction script.
+        fwhm: Gaussian FWHM in the coordinate units of the supplied positions.
         pixel_scale: Output coordinate units per image pixel.
         output_shape/origin: Optional explicit ``(ny, nx)`` grid and its lower
             coordinate origin. Alternatively, bounds can be supplied. With no
@@ -130,6 +137,9 @@ def gaussian_splat(
     if not np.isfinite(support_sigma) or support_sigma <= 0.0:
         raise ValueError("support_sigma must be finite and positive")
 
+    sigma_coordinate = float(fwhm) / 2.35
+    sigma_pixels = sigma_coordinate / float(pixel_scale)
+    support_radius = float(support_sigma) * sigma_coordinate
     x_coordinates, y_coordinates = _requested_grid(
         positions,
         pixel_scale=float(pixel_scale),
@@ -137,17 +147,15 @@ def gaussian_splat(
         origin=origin,
         x_bounds=x_bounds,
         y_bounds=y_bounds,
+        padding=support_radius,
     )
     ny, nx = y_coordinates.size, x_coordinates.size
-    sigma_coordinate = float(fwhm) / 2.35
-    sigma_pixels = sigma_coordinate / float(pixel_scale)
     x_grid, y_grid = np.meshgrid(x_coordinates, y_coordinates)
     flux_sum = np.zeros((ny, nx), dtype=float)
     weight_sum = np.zeros((ny, nx), dtype=float)
     contribution_count = np.zeros((ny, nx), dtype=np.int32)
     variance_numerator = np.zeros((ny, nx), dtype=float)
     error_weight_sum = np.zeros((ny, nx), dtype=float)
-    support_radius = float(support_sigma) * sigma_coordinate
     kernel_radius = max(
         1, int(np.ceil(max(4.0, float(support_sigma)) * sigma_pixels))
     )
