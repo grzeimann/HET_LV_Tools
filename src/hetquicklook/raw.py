@@ -12,7 +12,7 @@ from contextlib import contextmanager
 import io
 from pathlib import Path
 import tarfile
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -50,6 +50,15 @@ class RawFrameData:
         """Return ``(outer archive, nested archive member, FITS member)``."""
 
         return (self.archive_path, self.outer_tar_member, self.tar_member)
+
+
+@dataclass(frozen=True)
+class HeaderReadResult:
+    """Primary-header inspection result for one inventoried member."""
+
+    member: ArchiveMember
+    header: Mapping[str, Any] | None = None
+    error: str | None = None
 
 
 class RawFrameLoader:
@@ -130,6 +139,70 @@ class RawFrameLoader:
         with self._open_payload(path, member_name, nested_member) as stream:
             with fits.open(stream, memmap=False, lazy_load_hdus=True) as hdul:
                 return dict(hdul[0].header)
+
+    def read_headers(self, members: Iterable[ArchiveMember]) -> tuple[HeaderReadResult, ...]:
+        """Read primary headers while retaining member-specific failures.
+
+        Header inspection is intentionally separate from detector loading. A
+        malformed or unreadable member remains visible to the caller rather
+        than preventing the other members from being represented.
+        """
+
+        requested = tuple(members)
+        headers: dict[str, dict[str, Any]] = {}
+        errors: dict[str, str] = {}
+        groups: dict[tuple[Path, str | None], list[ArchiveMember]] = {}
+        for member in requested:
+            groups.setdefault((member.archive_path, member.outer_tar_member), []).append(member)
+
+        for (path, nested_name), group in groups.items():
+            try:
+                with tarfile.open(path, mode="r:*") as outer:
+                    if nested_name is None:
+                        self._read_headers_from_tar(outer, group, headers, errors)
+                    else:
+                        nested_info = outer.getmember(nested_name)
+                        nested_stream = outer.extractfile(nested_info)
+                        if nested_stream is None:
+                            raise FileNotFoundError(f"Cannot extract {nested_name} from {path}")
+                        try:
+                            with tarfile.open(fileobj=nested_stream, mode="r:*") as inner:
+                                self._read_headers_from_tar(inner, group, headers, errors)
+                        finally:
+                            nested_stream.close()
+            except (OSError, KeyError, tarfile.TarError) as error:
+                for member in group:
+                    errors.setdefault(member.member_name, str(error))
+
+        return tuple(
+            HeaderReadResult(
+                member=member,
+                header=headers.get(member.member_name),
+                error=errors.get(member.member_name),
+            )
+            for member in requested
+        )
+
+    @staticmethod
+    def _read_headers_from_tar(
+        archive: tarfile.TarFile,
+        members: Iterable[ArchiveMember],
+        headers: dict[str, dict[str, Any]],
+        errors: dict[str, str],
+    ) -> None:
+        for member in members:
+            try:
+                info = archive.getmember(member.member_name)
+                stream = archive.extractfile(info)
+                if stream is None:
+                    raise FileNotFoundError(f"Cannot extract {member.member_name}")
+                try:
+                    with fits.open(stream, memmap=False, lazy_load_hdus=True) as hdul:
+                        headers[member.member_name] = dict(hdul[0].header)
+                finally:
+                    stream.close()
+            except (OSError, ValueError, KeyError, tarfile.TarError, fits.VerifyError) as error:
+                errors[member.member_name] = str(error)
 
     def load(
         self,

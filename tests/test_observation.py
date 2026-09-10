@@ -46,7 +46,9 @@ def test_observation_represents_partial_components_and_groups_exposures(
     observation = load_observation(discovered)
 
     assert len(observation.frames) == 2
-    assert observation.metadata.object_name == "skyflat"
+    assert observation.metadata.object_name is None
+    assert observation.exposure_for("20260910T010101.1").metadata.object_name == "skyflat"
+    assert observation.exposure_for("20260910T010202.2").metadata.object_name == "skyflat"
     assert observation.metadata.exposure_time_s is None
     assert observation.metadata.requested_ra_deg is None
     assert set(observation.group_by_exposure()) == {
