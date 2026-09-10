@@ -67,7 +67,9 @@ def test_supported_virus_orientation_is_only_a_transform_description() -> None:
 
 def test_lrs2_mapping_uses_explicit_columns_and_amp_order(tmp_path: Path) -> None:
     path = tmp_path / "LRS2_B_UV_mapping.txt"
-    np.savetxt(path, np.column_stack((np.arange(280), np.arange(280) + 100)))
+    with path.open("w") as stream:
+        stream.write("# header\n" * 5)
+        np.savetxt(stream, np.column_stack((np.arange(280), np.arange(280) + 100)))
 
     positions, _ = LRS2FiberPositionLoader(tmp_path).fiber_positions(
         "UV", "LL", coordinate_columns=(0, 1)
@@ -76,3 +78,57 @@ def test_lrs2_mapping_uses_explicit_columns_and_amp_order(tmp_path: Path) -> Non
     assert positions.shape == (140, 2)
     np.testing.assert_array_equal(positions[0], [279, 379])
     np.testing.assert_array_equal(positions[-1], [140, 240])
+
+
+def test_packaged_static_resources_are_independent_of_working_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    virus = VirusTopologyLoader()
+    fplane, _ = virus.resolve_fplane()
+    normal, normal_reference = virus.fiber_positions("001", "LL")
+    reverse, reverse_reference = virus.fiber_positions("004", "LL")
+    lrs2 = LRS2FiberPositionLoader()
+
+    assert len(fplane) >= 70
+    assert normal.shape == (112, 2)
+    assert reverse.shape == (112, 2)
+    assert normal_reference.path.name == "IFUcen_HETDEX.txt"
+    assert reverse_reference.path.name == "IFUcen_HETDEX_reverse_R.txt"
+    for channel in ("UV", "Orange", "Red", "Far Red"):
+        for amplifier in ("LL", "LU", "RL", "RU"):
+            positions, _ = lrs2.fiber_positions(channel, amplifier)
+            assert positions.shape == (140, 2)
+
+
+def test_real_dated_trace_tree_resolves_virus_and_lrs2() -> None:
+    repository_root = Path(__file__).resolve().parents[1]
+    loader = VirusTopologyLoader(trace_root=repository_root)
+    virus_identity = PhysicalAmplifierIdentity(
+        instrument="virus",
+        ifu_slot="013",
+        amplifier="LL",
+        ifuid="043",
+        specid="412",
+        controller="S/N 0021",
+    )
+    lrs2_identity = PhysicalAmplifierIdentity(
+        instrument="lrs2",
+        ifu_slot="056",
+        amplifier="LL",
+        ifuid="7001",
+        specid="503",
+        controller="S/N 0086",
+    )
+
+    virus_trace, virus_reference = loader.resolve_trace_reference(
+        virus_identity, "20230116"
+    )
+    lrs2_trace, lrs2_reference = loader.resolve_trace_reference(
+        lrs2_identity, "20230116"
+    )
+
+    assert virus_trace.shape == (112, 2)
+    assert lrs2_trace.shape == (140, 2)
+    assert virus_reference.path.parent.name == "20230116"
+    assert lrs2_reference.path.parent.name == "20181108"
