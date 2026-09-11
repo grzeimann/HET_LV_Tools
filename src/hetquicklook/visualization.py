@@ -216,6 +216,152 @@ def plot_spatial_image(
     return ax.figure
 
 
+def plot_lrs2_channels(
+    channels: Mapping[str, LRS2ChannelQuicklook],
+    *,
+    title: str | None = None,
+    percentiles: tuple[float, float] = (2.0, 98.0),
+    show_fibers: bool = True,
+    show_fiducial: bool = False,
+    show_centroid: bool = False,
+) -> Any:
+    """Render the four-position LRS2 channel layout.
+
+    The four axes are kept even when evidence is partial. Missing channels
+    are labelled in their expected position, while the display stretch is
+    calculated from the channels that are present.
+    """
+
+    import matplotlib.pyplot as plt
+
+    order = ("UV", "Orange", "Red", "Far-Red")
+    finite_chunks = [
+        np.asarray(channels[channel].image, dtype=float).ravel()
+        for channel in order
+        if channel in channels
+    ]
+    finite_values = (
+        np.concatenate(finite_chunks) if finite_chunks else np.array([], dtype=float)
+    )
+    vmin, vmax = finite_limits(finite_values, percentiles)
+
+    fig, axes = plt.subplots(2, 2, figsize=(12, 10), constrained_layout=True)
+    for ax, channel_name in zip(axes.flat, order):
+        channel = channels.get(channel_name)
+        if channel is None:
+            ax.set_title(f"{channel_name} (missing)")
+            ax.text(
+                0.5,
+                0.5,
+                "No complete channel evidence",
+                ha="center",
+                va="center",
+                transform=ax.transAxes,
+            )
+            ax.set_axis_off()
+            continue
+
+        image = np.asarray(channel.image, dtype=float)
+        kwargs: dict[str, Any] = {
+            "origin": "lower",
+            "aspect": "equal",
+            "interpolation": "nearest",
+        }
+        if vmin is not None:
+            kwargs.update(vmin=vmin, vmax=vmax)
+        extent = grid_extent(
+            np.asarray(channel.spatial_x_coordinates, dtype=float),
+            np.asarray(channel.spatial_y_coordinates, dtype=float),
+        )
+        artist = ax.imshow(image, extent=extent, **kwargs)
+        fig.colorbar(artist, ax=ax, fraction=0.046, pad=0.04, label="Collapsed signal")
+
+        if show_fibers:
+            positions = np.asarray(channel.fiber_positions, dtype=float)
+            if positions.size:
+                ax.scatter(
+                    positions[:, 0],
+                    positions[:, 1],
+                    facecolors="none",
+                    edgecolors="white",
+                    s=10,
+                    linewidths=0.35,
+                    label="Fibers",
+                )
+        if show_fiducial and channel.intended_fiducial is not None:
+            fx, fy = channel.intended_fiducial
+            ax.scatter([fx], [fy], marker="x", s=90, linewidths=1.8, label="Intended")
+        if show_centroid and channel.measured_centroid is not None:
+            cx, cy = channel.measured_centroid.x, channel.measured_centroid.y
+            if np.all(np.isfinite([cx, cy])):
+                ax.scatter(
+                    [cx], [cy], marker="+", s=110, linewidths=1.8, label="Measured"
+                )
+        if ax.get_legend_handles_labels()[0]:
+            ax.legend(loc="best", fontsize="small")
+        ax.set_xlabel("IFU x [arcsec]")
+        ax.set_ylabel("IFU y [arcsec]")
+        ax.set_title(channel_name)
+
+    if title:
+        fig.suptitle(title)
+    return fig
+
+
+def plot_virus_ifu_amplifiers(
+    amplifier_products: Mapping[str, SpatialQuicklook],
+    *,
+    ifu_slot: str | None = None,
+    title: str | None = None,
+    percentiles: tuple[float, float] = (2.0, 98.0),
+    show_fibers: bool = True,
+    show_fiducial: bool = False,
+    show_centroid: bool = False,
+) -> Any:
+    """Render available amplifier products for one VIRUS IFU.
+
+    This is an evidence view for one IFU, not a whole-VIRUS spatial
+    reconstruction. Each amplifier retains its own detector-derived image.
+    """
+
+    import matplotlib.pyplot as plt
+
+    slot = None if ifu_slot is None else str(ifu_slot).strip().zfill(3)
+    order = ("LL", "LU", "RL", "RU")
+    fig, axes = plt.subplots(2, 2, figsize=(12, 10), constrained_layout=True)
+    for ax, amplifier in zip(axes.flat, order):
+        token = amplifier if amplifier in amplifier_products else None
+        if token is None and slot is not None:
+            token = f"{slot}{amplifier}"
+        product = amplifier_products.get(token) if token is not None else None
+        if product is None:
+            ax.set_title(f"{amplifier} (missing)")
+            ax.text(
+                0.5,
+                0.5,
+                "No amplifier evidence",
+                ha="center",
+                va="center",
+                transform=ax.transAxes,
+            )
+            ax.set_axis_off()
+            continue
+        _plot_spatial_result(
+            product,
+            topology=None,
+            ax=ax,
+            title=amplifier,
+            percentiles=percentiles,
+            show_fibers=show_fibers,
+            show_fiducial=show_fiducial,
+            show_centroid=show_centroid,
+            colorbar=True,
+        )
+    if title:
+        fig.suptitle(title)
+    return fig
+
+
 def plot_fiber_values(
     result: QuicklookResult,
     *,

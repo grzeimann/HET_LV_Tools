@@ -9,6 +9,7 @@ from hetquicklook.visualization import (
     fiber_value_array,
     finite_limits,
     grid_extent,
+    plot_lrs2_channels,
     plot_fiber_values,
     plot_spatial_image,
     plot_spatial_support,
@@ -64,3 +65,17 @@ def test_display_helpers_handle_finite_limits_and_physical_grid_edges() -> None:
     assert grid_extent(np.array([-0.2, 0.2]), np.array([-0.2, 0.2])) == [
         -0.4, 0.4, -0.4, 0.4
     ]
+
+
+def test_lrs2_channel_layout_keeps_missing_panels_visible() -> None:
+    channel = _channel_result()
+    channels = {
+        name: channel
+        for name in ("UV", "Orange", "Red", "Far-Red")
+    }
+    channels.pop("Orange")
+
+    figure = plot_lrs2_channels(channels, show_fibers=False)
+
+    assert len(figure.axes) >= 4
+    assert any("Orange (missing)" in axis.get_title() for axis in figure.axes)

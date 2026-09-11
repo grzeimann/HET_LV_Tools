@@ -52,6 +52,7 @@ from .topology import (
     virus_orientation,
 )
 from .workflows import (
+    AmplifierQuicklookEvidence,
     AmplifierTopologyResult,
     LRS2AmplifierQuicklookEvidence,
     LRS2ChannelQuicklook,
@@ -65,7 +66,17 @@ from .workflows import (
     combine_lrs2_channel_products,
     combine_lrs2_channels,
     run_lrs2_channel_quicklooks,
+    run_virus_ifu_quicklooks,
+    VIRUSIFUQuicklookSet,
+    VIRUSQuicklookSet,
     spatial_defaults_for,
+)
+from .highlevel import (
+    QuicklookExposure,
+    QuicklookIFU,
+    QuicklookNight,
+    QuicklookProduct,
+    QuicklookSite,
 )
 
 __all__ = [
@@ -84,6 +95,11 @@ __all__ = [
     "Observation",
     "Exposure",
     "QuicklookConfig",
+    "QuicklookSite",
+    "QuicklookNight",
+    "QuicklookExposure",
+    "QuicklookProduct",
+    "QuicklookIFU",
     "RawFrameData",
     "HeaderReadResult",
     "RawFrameIdentity",
@@ -123,11 +139,15 @@ __all__ = [
     "LRS2ChannelQuicklook",
     "LRS2AmplifierQuicklookEvidence",
     "LRS2QuicklookSet",
+    "AmplifierQuicklookEvidence",
+    "VIRUSIFUQuicklookSet",
+    "VIRUSQuicklookSet",
     "AmplifierTopologyResult",
     "build_amplifier_topology",
     "combine_lrs2_channel_products",
     "combine_lrs2_channels",
     "run_lrs2_channel_quicklooks",
+    "run_virus_ifu_quicklooks",
     "spatial_defaults_for",
 ]
 

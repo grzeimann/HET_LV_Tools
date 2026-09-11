@@ -11,7 +11,7 @@ full VIRUS or LRS2 reduction pipelines.
 
 - Getting started: [Installation](docs/installation.md) · [Quick-look workflows](docs/quicklook.md)
 - Data and instrument information: [Data layout](docs/data_layout.md) · [VIRUS](docs/virus.md) · [LRS2](docs/lrs2.md)
-- Interactive exploration: [Presentation playground](notebooks/hetquicklook_presentation_playground.ipynb) · [LRS2 channel review](notebooks/lrs2_channel_quicklook_review.ipynb)
+- Interactive exploration: [Presentation playground](notebooks/hetquicklook_presentation_playground.ipynb)
 
 ## Install (conda or pip)
 
@@ -54,6 +54,31 @@ observations = discover_observations(
 observation = load_observation(observations[0])
 print(observation.exposure_ids)
 ```
+
+## Interactive quickstart
+
+For routine notebook use, configure the raw and trace roots once, then choose
+a night, select an exposure from its compact HTML inventory, and display the
+instrument quick look:
+
+```python
+from hetquicklook import QuicklookSite
+
+ql = QuicklookSite(
+    raw_roots={"lrs2": "~/data/LRS2", "virus": "~/data/VIRUS"},
+    trace_root=".",
+)
+night = ql.night("20260512", instrument="lrs2")
+night
+product = night[19].quicklook()
+product.plot()
+```
+
+The selected exposure and product retain the underlying observations,
+classification, archive-member provenance, detector results, topology and
+trace evidence, amplifier products, and channel products. See the
+[interactive quick-start guide](docs/quicklook.md) for selection, partial
+evidence, and advanced inspection.
 
 For the detector-to-fiber workflow and result objects, see the [quick-look
 workflow guide](docs/quicklook.md) and the notebook.
@@ -120,7 +145,10 @@ The current package and notebook provide:
   the `(0, 0)` IFU fiducial; and
 * complete LRS2 quick looks that process eight amplifier products independently
   and compose them into the four UV, Orange, Red, and Far-Red channel products
-  while retaining amplifier-level evidence.
+  while retaining amplifier-level evidence; and
+* high-level site, night, exposure, and product wrappers with compact exposure
+  inventories, automatic flat/standard dispatch, partial-channel evidence,
+  and instrument-aware plotting.
 
 The default quick-look settings are:
 
@@ -155,12 +183,10 @@ can change without changing the stored scientific results.
 
 The next development work is to:
 
-* connect archive selection, metadata, topology, quick-look execution, plotting,
-  and output into a concise end-to-end operational workflow;
-* use representative LRS2 flat and standard-star observations, followed by a
-  VIRUS IFU, to settle the operator-facing presentation;
-* promote useful notebook views into reusable package visualizations, including
-  a clear four-channel LRS2 view and a VIRUS IFU or whole-focal-plane overview;
+* evaluate the high-level workflow on representative LRS2 flat and
+  standard-star observations, followed by a VIRUS IFU;
+* promote additional useful notebook views into reusable package
+  visualizations, including a VIRUS IFU or whole-focal-plane overview;
 * evaluate centroid and display choices on real observations before defining
   evidence-based operational thresholds.
 

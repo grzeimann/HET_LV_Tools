@@ -1,4 +1,59 @@
-# Quick-look workflows
+# Interactive quick start
+
+The high-level API is the normal entry point for an interactive notebook. It
+keeps archive discovery, exposure bookkeeping, detector preparation, trace
+resolution, topology construction, and instrument-specific presentation
+behind a small set of orchestration objects.
+
+```python
+from hetquicklook import QuicklookSite
+
+ql = QuicklookSite(
+    raw_roots={
+        "lrs2": "~/data/LRS2",
+        "virus": "~/data/VIRUS",
+    },
+    trace_root=".",
+)
+
+night = ql.night("20260512", instrument="lrs2")
+night
+
+exposure = night[19]
+product = exposure.quicklook()
+product.plot()
+```
+
+Evaluating `night` in Jupyter displays one compact row per encoded exposure,
+including exposures from multiple observation archives. Rows use zero-based
+Python indexing, so `night[19]` selects the row labelled `19`. The selected
+`QuicklookExposure` retains its `observation`, `raw_exposure`, `metadata`, and
+`classification` attributes.
+
+Automatic dispatch uses the existing deterministic classification. Recognized
+LDLS or Qth flats use the flat workflow, and catalog-matched standard stars use
+the standard-star workflow. Unsupported science or unrecognized calibration
+exposures raise a descriptive error rather than being guessed. An expert may
+use `exposure.quicklook(kind="flat")` or `kind="standard"` when an explicit
+override is appropriate.
+
+For LRS2, `product.channels` contains every complete UV, Orange, Red, and
+Far-Red channel that can be formed from the archive evidence. The product also
+retains `product.raw_result`, `product.amplifier_evidence`,
+`product.missing_amplifiers`, and `product.processing_failures`. A channel is
+created only from its two required 140-fiber amplifier products.
+
+For VIRUS, `product.ifus` groups the available amplifier evidence by physical
+IFU slot. No arbitrary IFU or amplifier is selected. If one IFU is present,
+`product.plot()` renders its available amplifier evidence; with multiple IFUs,
+select one explicitly with `product.plot(ifu="074")`. A whole-VIRUS
+focal-plane composition is outside this workflow layer.
+
+The high-level objects are orchestration and presentation wrappers. The
+lower-level numerical workflows remain useful when an expert needs direct
+control over a prepared detector array and `FiberTopology`.
+
+# Low-level quick-look workflows
 
 The numerical workflows operate on a detector image and an amplifier-level
 fiber topology. A dense topology contains a detector trace for each detector
@@ -63,15 +118,17 @@ for an already discovered `Exposure`; it loads its raw members on demand. It
 runs the same independent amplifier path
 for the eight expected LRS2 amplifier tokens, retains each
 `LRS2AmplifierQuicklookEvidence` record, and returns an `LRS2QuicklookSet`
-containing both the amplifier products and the four complete channel
-products. It requires all eight requested frame members and reports missing
-members explicitly.
+containing both the amplifier products and complete channel products. Its
+default direct workflow requires all eight requested frame members. The
+high-level API uses `allow_partial=True` to retain available evidence and
+compose only complete channel pairs, with missing amplifiers and processing
+failures recorded separately.
 
 The reusable Matplotlib functions in `hetquicklook.visualization` include
-`plot_spatial_image`, `plot_fiber_values`, and `plot_spatial_support`. They
-accept either an amplifier `SpatialQuicklook` or an `LRS2ChannelQuicklook`.
-The notebook keeps its four-panel layout as an exploratory presentation
-choice while using these package helpers for the individual evidence views.
+`plot_spatial_image`, `plot_fiber_values`, `plot_spatial_support`,
+`plot_lrs2_channels`, and the per-IFU VIRUS amplifier view. The high-level
+product uses `plot_lrs2_channels` for the four-panel LRS2 layout and preserves
+the lower-level helpers for individual evidence views.
 
 ## LRS2 channel products
 

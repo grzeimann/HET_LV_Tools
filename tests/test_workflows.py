@@ -5,6 +5,7 @@ import numpy as np
 import pytest
 
 import hetquicklook.workflows as workflows
+from hetquicklook.classification import ExposureClassification
 from hetquicklook.discovery import ArchiveMember, RawFrameIdentity
 from hetquicklook.fibers import FiberTopology
 from hetquicklook.instrument import Instrument, PhysicalAmplifierIdentity
@@ -453,3 +454,154 @@ def test_lrs2_batch_workflow_retains_amplifier_evidence_and_channels(
     assert set(result.amplifier_products) == set(tokens)
     assert all(channel.fiber_values.shape == (280,) for channel in result.channels.values())
     assert len(calls) == 8
+
+
+def test_lrs2_batch_workflow_can_retain_partial_amplifier_evidence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tokens = (
+        "056LL", "056RL", "056RU",
+        "066LL", "066LU", "066RL", "066RU",
+    )
+    frames = []
+    identities = {}
+    for token in tokens:
+        identity = RawFrameIdentity("exp001", token, "twi")
+        member = ArchiveMember(
+            archive_path=tmp_path / "lrs2.tar",
+            member_name=f"exp001_{token}_twi.fits",
+            size=1,
+            identity=identity,
+        )
+        frames.append(member)
+        identities[member.member_name] = PhysicalAmplifierIdentity(
+            instrument=Instrument.LRS2,
+            ifu_slot=identity.ifu_slot,
+            amplifier=identity.amplifier,
+            ifuid="7001" if identity.ifu_slot == "056" else "7002",
+            specid="503" if identity.ifu_slot == "056" else "502",
+            controller="controller",
+        )
+    exposure = Exposure(
+        exposure_id="exp001",
+        frames=tuple(frames),
+        metadata=ExposureMetadata(
+            exposure_id="exp001", frame_types=("twi",), frame_class="calibration"
+        ),
+        classification=ExposureClassification(quicklook_kind="flat"),
+        physical_identities=identities,
+    )
+
+    class Loader:
+        def load(self, member):
+            return RawFrameData(
+                data=np.zeros((2, 2)),
+                header={},
+                path=str(member.archive_path),
+                tar_member=member.member_name,
+                identity=member.identity,
+            )
+
+    detector = AlgorithmResult(
+        "detector", "test", {
+            "oriented_detector_image": np.zeros((2, 2)),
+            "detector_variance": np.ones((2, 2)),
+        }, {},
+    )
+    monkeypatch.setattr(workflows, "reduce_amplifier_array", lambda data, header: detector)
+
+    def fake_topology(prepared_detector, physical_identity, **kwargs):
+        topology = FiberTopology.from_arrays(
+            physical_identity.amplifier,
+            ("fiber",),
+            np.array([[0.0]]),
+            np.array([[0.0]]),
+            np.array([0.0]),
+            np.array([0.0]),
+        )
+        return AmplifierTopologyResult(
+            topology=topology,
+            trace_result=AlgorithmResult("trace", "test", {}, {}),
+            physical_identity=physical_identity,
+            trace_provenance=TopologyReference("trace", tmp_path / "trace"),
+            position_provenance=TopologyReference("positions", tmp_path / "positions"),
+        )
+
+    monkeypatch.setattr(workflows, "build_amplifier_topology", fake_topology)
+    monkeypatch.setattr(
+        workflows,
+        "run_ldls_flat_quicklook",
+        lambda prepared_detector, topology, **kwargs: _lrs2_amplifier_product(
+            topology.amplifier, value=1.0
+        ),
+    )
+
+    result = run_lrs2_channel_quicklooks(
+        exposure,
+        trace_root=tmp_path,
+        frame_type="twi",
+        loader=Loader(),
+        allow_partial=True,
+    )
+
+    assert result.missing_amplifiers == ("056LU",)
+    assert "056LU" not in result.amplifier_evidence
+    assert tuple(result.channels) == ("Orange", "Red", "Far-Red")
+    assert result.processing_failures == {}
+
+
+def test_virus_archive_workflow_groups_evidence_by_ifu(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tokens = (
+        "074LL", "074LU", "074RL", "074RU",
+        "075LL", "075LU", "075RL",
+    )
+    frames = []
+    identities = {}
+    for token in tokens:
+        identity = RawFrameIdentity("exp001", token, "twi")
+        member = ArchiveMember(
+            archive_path=tmp_path / "virus.tar",
+            member_name=f"exp001_{token}_twi.fits",
+            size=1,
+            identity=identity,
+        )
+        frames.append(member)
+        identities[member.member_name] = PhysicalAmplifierIdentity(
+            instrument=Instrument.VIRUS,
+            ifu_slot=identity.ifu_slot,
+            amplifier=identity.amplifier,
+            ifuid=identity.ifu_slot,
+            specid="412",
+            controller="controller",
+        )
+    exposure = Exposure(
+        exposure_id="exp001",
+        frames=tuple(frames),
+        metadata=ExposureMetadata(
+            exposure_id="exp001", frame_types=("twi",), frame_class="calibration"
+        ),
+        classification=ExposureClassification(quicklook_kind="flat"),
+        physical_identities=identities,
+    )
+    amplifier_product = SpatialQuicklook(
+        fiber_values={"fiber": 1.0},
+        image=np.ones((1, 1)),
+        instrument=Instrument.VIRUS,
+    )
+    monkeypatch.setattr(
+        workflows,
+        "_run_archive_amplifier_quicklook",
+        lambda *args, **kwargs: (object(), object(), object(), amplifier_product),
+    )
+
+    result = workflows.run_virus_ifu_quicklooks(
+        exposure, trace_root=tmp_path, frame_type="twi"
+    )
+
+    assert tuple(result.ifus) == ("074", "075")
+    assert set(result.ifus["074"].amplifier_evidence) == {
+        "074LL", "074LU", "074RL", "074RU"
+    }
+    assert result.ifus["075"].missing_amplifiers == ("075RU",)
