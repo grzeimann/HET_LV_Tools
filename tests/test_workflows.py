@@ -607,44 +607,51 @@ def test_virus_archive_workflow_fails_on_incomplete_ifu(
 def test_virus_workflow_composes_one_ifu_image_and_reports_diagnostics(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    tokens = ("074LL", "074LU", "074RL", "074RU")
+    slot_ids = (("074", "043"), ("075", "044"))
+    tokens = tuple(
+        f"{slot}{amplifier}"
+        for slot, _ifuid in slot_ids
+        for amplifier in ("LL", "LU", "RL", "RU")
+    )
     frames = []
     identities = {}
     products = {}
-    for amp_index, token in enumerate(tokens):
-        identity = RawFrameIdentity("exp001", token, "twi")
-        member = ArchiveMember(
-            archive_path=tmp_path / "virus.tar",
-            member_name=f"exp001_{token}_twi.fits",
-            size=1,
-            identity=identity,
-        )
-        frames.append(member)
-        identities[member.member_name] = PhysicalAmplifierIdentity(
-            instrument=Instrument.VIRUS,
-            ifu_slot=identity.ifu_slot,
-            amplifier=identity.amplifier,
-            ifuid="043",
-            specid="412",
-            controller="controller",
-        )
-        values = {
-            f"{token}-{index:03d}": float(index + amp_index)
-            for index in range(112)
-        }
-        positions = {
-            fiber_id: (
-                float(index % 16) - 7.5,
-                float(index // 16) + amp_index * 8.0,
+    for slot, ifuid in slot_ids:
+        for amp_index, amplifier in enumerate(("LL", "LU", "RL", "RU")):
+            token = f"{slot}{amplifier}"
+            identity = RawFrameIdentity("exp001", token, "twi")
+            member = ArchiveMember(
+                archive_path=tmp_path / "virus.tar",
+                member_name=f"exp001_{token}_twi.fits",
+                size=1,
+                identity=identity,
             )
-            for index, fiber_id in enumerate(values)
-        }
-        products[token] = SpatialQuicklook(
-            fiber_values=values,
-            fiber_positions=positions,
-            image=np.ones((2, 2)),
-            instrument=Instrument.VIRUS,
-        )
+            frames.append(member)
+            identities[member.member_name] = PhysicalAmplifierIdentity(
+                instrument=Instrument.VIRUS,
+                ifu_slot=identity.ifu_slot,
+                amplifier=identity.amplifier,
+                ifuid=ifuid,
+                specid="412",
+                controller="controller",
+            )
+            values = {
+                f"{token}-{index:03d}": float(index + amp_index)
+                for index in range(112)
+            }
+            positions = {
+                fiber_id: (
+                    float(index % 16) - 7.5,
+                    float(index // 16) + amp_index * 8.0,
+                )
+                for index, fiber_id in enumerate(values)
+            }
+            products[token] = SpatialQuicklook(
+                fiber_values=values,
+                fiber_positions=positions,
+                image=np.ones((2, 2)),
+                instrument=Instrument.VIRUS,
+            )
 
     exposure = Exposure(
         exposure_id="exp001",
@@ -684,5 +691,5 @@ def test_virus_workflow_composes_one_ifu_image_and_reports_diagnostics(
     assert ifu.diagnostics.worker_count == 2
     assert ifu.diagnostics.retained_array_bytes > 0
     assert "ifu.composition" in ifu.diagnostics.stage_seconds
-    assert set(result.diagnostics) == {"074"}
+    assert set(result.diagnostics) == {"074", "075"}
     assert len(thread_names) == 2

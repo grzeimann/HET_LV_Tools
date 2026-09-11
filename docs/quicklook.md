@@ -37,8 +37,10 @@ expert may use `exposure.quicklook(kind="flat")`, `kind="standard"`, or
 
 VIRUS processing is sequential by default. For diagnostics or an explicit
 parallel experiment, the quick-look call accepts `timing=True`,
-`memory_check=True`, and `nworkers=2`; the resulting per-IFU diagnostics are
-available at `product.ifus["074"].diagnostics`.
+`memory_check=True`, and `nworkers=2`. VIRUS workers process complete IFUs;
+each worker handles the four amplifiers and composes one IFU image. The
+resulting per-IFU diagnostics are available at
+`product.ifus["074"].diagnostics`.
 
 For LRS2, successful `product.channels` contains the complete UV, Orange, Red,
 Far-Red channel set. Missing required amplifier files or processing failures

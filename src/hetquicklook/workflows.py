@@ -445,7 +445,7 @@ def _required_amplifier_tokens(identity: PhysicalAmplifierIdentity) -> tuple[str
 
 
 def _worker_count(requested: int, available: int) -> int:
-    """Validate and cap an amplifier worker count."""
+    """Validate and cap a workflow worker count."""
 
     try:
         count = int(requested)
@@ -1690,11 +1690,12 @@ def run_virus_ifu_quicklooks(
                 f"missing required amplifier frame(s): {', '.join(missing)}"
             )
 
-    ifus: dict[str, VIRUSIFUQuicklookSet] = {}
-    ifu_diagnostics: dict[str, QuicklookDiagnostics] = {}
-    for slot in sorted(frames_by_ifu):
+    ifu_worker_count = _worker_count(nworkers, len(frames_by_ifu))
+
+    def process_ifu(
+        slot: str,
+    ) -> tuple[str, VIRUSIFUQuicklookSet, QuicklookDiagnostics]:
         by_amplifier = frames_by_ifu[slot]
-        worker_count = _worker_count(nworkers, len(expected_amplifiers))
         ifu_started = perf_counter() if timing else 0.0
 
         def process_amplifier(amplifier: str):
@@ -1719,27 +1720,13 @@ def run_virus_ifu_quicklooks(
                 trace_provider=trace_provider,
                 timing=timing,
                 memory_check=memory_check,
-                worker_count=worker_count,
+                worker_count=ifu_worker_count,
             )
             return _unpack_archive_quicklook_result(result)
 
         processed: dict[str, tuple[object, ...]] = {}
-        if worker_count == 1:
-            for amplifier in expected_amplifiers:
-                processed[amplifier] = process_amplifier(amplifier)
-        else:
-            with ThreadPoolExecutor(max_workers=worker_count) as executor:
-                futures = {
-                    executor.submit(process_amplifier, amplifier): amplifier
-                    for amplifier in expected_amplifiers
-                }
-                try:
-                    for future in as_completed(futures):
-                        processed[futures[future]] = future.result()
-                except Exception:
-                    for future in futures:
-                        future.cancel()
-                    raise
+        for amplifier in expected_amplifiers:
+            processed[amplifier] = process_amplifier(amplifier)
 
         evidence: dict[str, AmplifierQuicklookEvidence] = {}
         for amplifier in expected_amplifiers:
@@ -1792,15 +1779,39 @@ def run_virus_ifu_quicklooks(
             stage_seconds=stage_seconds,
             retained_array_bytes=retained_bytes,
             peak_rss_bytes=max(peak_values) if peak_values else None,
-            worker_count=worker_count,
+            worker_count=ifu_worker_count,
         )
-        ifus[slot] = VIRUSIFUQuicklookSet(
-            ifu_slot=slot,
-            amplifier_evidence=evidence,
-            product=product,
-            diagnostics=diagnostics,
+        return (
+            slot,
+            VIRUSIFUQuicklookSet(
+                ifu_slot=slot,
+                amplifier_evidence=evidence,
+                product=product,
+                diagnostics=diagnostics,
+            ),
+            diagnostics,
         )
-        ifu_diagnostics[slot] = diagnostics
+
+    processed_ifus: dict[str, tuple[VIRUSIFUQuicklookSet, QuicklookDiagnostics]] = {}
+    slots = tuple(sorted(frames_by_ifu))
+    if ifu_worker_count == 1:
+        completed = (process_ifu(slot) for slot in slots)
+        for slot, result, diagnostics in completed:
+            processed_ifus[slot] = (result, diagnostics)
+    else:
+        with ThreadPoolExecutor(max_workers=ifu_worker_count) as executor:
+            futures = {executor.submit(process_ifu, slot): slot for slot in slots}
+            try:
+                for future in as_completed(futures):
+                    slot, result, diagnostics = future.result()
+                    processed_ifus[slot] = (result, diagnostics)
+            except Exception:
+                for future in futures:
+                    future.cancel()
+                raise
+
+    ifus = {slot: processed_ifus[slot][0] for slot in slots}
+    ifu_diagnostics = {slot: processed_ifus[slot][1] for slot in slots}
     return VIRUSQuicklookSet(ifus=ifus, diagnostics=ifu_diagnostics)
 
 
