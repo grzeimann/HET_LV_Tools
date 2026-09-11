@@ -26,8 +26,8 @@ def test_virus_fiber_positions_apply_slice_and_extracted_order(tmp_path: Path) -
     positions, reference = VirusTopologyLoader(tmp_path).fiber_positions("001", "LU")
 
     assert positions.shape == (112, 2)
-    np.testing.assert_array_equal(positions[0], [112, 121])
-    np.testing.assert_array_equal(positions[-1], [1, 10])
+    np.testing.assert_array_equal(positions[0], [112, 0])
+    np.testing.assert_array_equal(positions[-1], [1, 0])
     assert reference.path.name == "IFUcen_HETDEX.txt"
 
 
@@ -99,6 +99,19 @@ def test_packaged_static_resources_are_independent_of_working_directory(
         for amplifier in ("LL", "LU", "RL", "RU"):
             positions, _ = lrs2.fiber_positions(channel, amplifier)
             assert positions.shape == (140, 2)
+
+
+def test_packaged_virus_positions_span_one_physical_ifu_plane() -> None:
+    loader = VirusTopologyLoader()
+    positions = np.concatenate(
+        [loader.fiber_positions("001", amplifier)[0] for amplifier in ("LL", "LU", "RL", "RU")]
+    )
+
+    assert positions.shape == (448, 2)
+    assert positions[:, 0].min() == pytest.approx(-24.15)
+    assert positions[:, 0].max() == pytest.approx(24.15)
+    assert positions[:, 1].min() == pytest.approx(-24.24)
+    assert positions[:, 1].max() == pytest.approx(24.24)
 
 
 def test_real_dated_trace_tree_resolves_virus_and_lrs2() -> None:

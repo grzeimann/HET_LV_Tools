@@ -35,6 +35,11 @@ standard-star workflow, and science exposures use the target workflow. An
 expert may use `exposure.quicklook(kind="flat")`, `kind="standard"`, or
 `kind="target"` when an explicit override is appropriate.
 
+VIRUS processing is sequential by default. For diagnostics or an explicit
+parallel experiment, the quick-look call accepts `timing=True`,
+`memory_check=True`, and `nworkers=2`; the resulting per-IFU diagnostics are
+available at `product.ifus["074"].diagnostics`.
+
 For LRS2, successful `product.channels` contains the complete UV, Orange, Red,
 Far-Red channel set. Missing required amplifier files or processing failures
 raise a contextual `QuicklookError`; no partial scientific product is returned.
@@ -42,10 +47,11 @@ The product retains `product.raw_result` and `product.amplifier_evidence`.
 A channel is created only from its two required 140-fiber amplifier products.
 
 For VIRUS, `product.ifus` groups the complete four-amplifier evidence by
-physical IFU slot. No arbitrary IFU or amplifier is selected. If one IFU is
-present, `product.plot()` renders its amplifier evidence; with multiple IFUs,
-select one explicitly with `product.plot(ifu="074")`. A whole-VIRUS focal-plane
-composition is outside this workflow layer.
+physical IFU slot and composes one approximately 50-arcsecond IFU-plane image
+from all 448 fibers. No arbitrary IFU or amplifier is selected. If one IFU is
+present, `product.plot()` renders its combined image; with multiple IFUs,
+select one explicitly with `product.plot(ifu="074")`. The individual
+amplifier views remain available through `product.ifus["074"].plot_amplifiers()`.
 
 The high-level objects are orchestration and presentation wrappers. The
 lower-level numerical workflows remain useful when an expert needs direct

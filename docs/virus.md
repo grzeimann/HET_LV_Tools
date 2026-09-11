@@ -27,6 +27,11 @@ positions, position_reference = loader.fiber_positions("043", "LL")
 traces, trace_reference = loader.resolve_trace_reference(identity, "20230116")
 ```
 
+The fiber-position loader uses the source IFU x/y columns. The four amplifier
+slices are combined only after detector extraction and collapse, when their
+448 physical fiber values are reconstructed into one IFU-plane quick-look
+image.
+
 The trace root contains `Fiber_Locations/<YYYYMMDD>/`. The same resolver also
 supports LRS2 physical identities because those trace files use the same
 address convention.

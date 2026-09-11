@@ -386,6 +386,9 @@ class QuicklookExposure:
         output_shape: tuple[int, int] | None = None,
         origin: tuple[float, float] | None = None,
         resource_root: str | Path | None = None,
+        nworkers: int = 1,
+        timing: bool = False,
+        memory_check: bool = False,
     ) -> "QuicklookProduct":
         """Build a product using existing classification and workflows."""
 
@@ -425,6 +428,11 @@ class QuicklookExposure:
                 **common,
             )
         else:
+            common.update(
+                nworkers=nworkers,
+                timing=timing,
+                memory_check=memory_check,
+            )
             raw_result = workflows.run_virus_ifu_quicklooks(
                 self.raw_exposure,
                 **common,
@@ -440,7 +448,7 @@ class QuicklookExposure:
 
 @dataclass(frozen=True)
 class QuicklookIFU:
-    """High-level VIRUS product for one IFU's retained amplifier evidence."""
+    """High-level VIRUS product for one IFU and its amplifier evidence."""
 
     raw_result: workflows.VIRUSIFUQuicklookSet
 
@@ -456,6 +464,20 @@ class QuicklookIFU:
     def amplifier_products(self):
         return self.raw_result.amplifier_products
 
+    @property
+    def product(self) -> workflows.SpatialQuicklook:
+        """Return the single spatial image composed from all four amplifiers."""
+
+        if self.raw_result.product is None:
+            raise ValueError("VIRUS IFU result has no composed spatial product")
+        return self.raw_result.product
+
+    @property
+    def diagnostics(self) -> workflows.QuicklookDiagnostics:
+        """Return optional timing, memory, and worker diagnostics."""
+
+        return self.raw_result.diagnostics
+
     def plot(
         self,
         *,
@@ -465,12 +487,34 @@ class QuicklookIFU:
         show_fiducial: bool = False,
         show_centroid: bool = False,
     ) -> Any:
+        from .visualization import plot_spatial_image
+
+        return plot_spatial_image(
+            self.product,
+            title=title or f"VIRUS IFU {self.ifu_slot}",
+            percentiles=percentiles,
+            show_fibers=show_fibers,
+            show_fiducial=show_fiducial,
+            show_centroid=show_centroid,
+        )
+
+    def plot_amplifiers(
+        self,
+        *,
+        title: str | None = None,
+        percentiles: tuple[float, float] = (2.0, 98.0),
+        show_fibers: bool = True,
+        show_fiducial: bool = False,
+        show_centroid: bool = False,
+    ) -> Any:
+        """Render the four amplifier images as a diagnostic evidence view."""
+
         from .visualization import plot_virus_ifu_amplifiers
 
         return plot_virus_ifu_amplifiers(
             self.amplifier_products,
             ifu_slot=self.ifu_slot,
-            title=title or f"VIRUS IFU {self.ifu_slot}",
+            title=title or f"VIRUS IFU {self.ifu_slot} amplifiers",
             percentiles=percentiles,
             show_fibers=show_fibers,
             show_fiducial=show_fiducial,

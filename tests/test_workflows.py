@@ -1,5 +1,6 @@
 from datetime import date
 from pathlib import Path
+import threading
 
 import numpy as np
 import pytest
@@ -601,3 +602,87 @@ def test_virus_archive_workflow_fails_on_incomplete_ifu(
         workflows.run_virus_ifu_quicklooks(
             exposure, trace_root=tmp_path, frame_type="twi"
         )
+
+
+def test_virus_workflow_composes_one_ifu_image_and_reports_diagnostics(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tokens = ("074LL", "074LU", "074RL", "074RU")
+    frames = []
+    identities = {}
+    products = {}
+    for amp_index, token in enumerate(tokens):
+        identity = RawFrameIdentity("exp001", token, "twi")
+        member = ArchiveMember(
+            archive_path=tmp_path / "virus.tar",
+            member_name=f"exp001_{token}_twi.fits",
+            size=1,
+            identity=identity,
+        )
+        frames.append(member)
+        identities[member.member_name] = PhysicalAmplifierIdentity(
+            instrument=Instrument.VIRUS,
+            ifu_slot=identity.ifu_slot,
+            amplifier=identity.amplifier,
+            ifuid="043",
+            specid="412",
+            controller="controller",
+        )
+        values = {
+            f"{token}-{index:03d}": float(index + amp_index)
+            for index in range(112)
+        }
+        positions = {
+            fiber_id: (
+                float(index % 16) - 7.5,
+                float(index // 16) + amp_index * 8.0,
+            )
+            for index, fiber_id in enumerate(values)
+        }
+        products[token] = SpatialQuicklook(
+            fiber_values=values,
+            fiber_positions=positions,
+            image=np.ones((2, 2)),
+            instrument=Instrument.VIRUS,
+        )
+
+    exposure = Exposure(
+        exposure_id="exp001",
+        frames=tuple(frames),
+        metadata=ExposureMetadata(
+            exposure_id="exp001", frame_types=("twi",), frame_class="calibration"
+        ),
+        classification=ExposureClassification(quicklook_kind="flat"),
+        physical_identities=identities,
+    )
+
+    barrier = threading.Barrier(2)
+    thread_names: set[str] = set()
+
+    def fake_run(_exposure, frame, **kwargs):
+        token = frame.identity.amplifier_token
+        thread_names.add(threading.current_thread().name)
+        barrier.wait(timeout=2.0)
+        return (object(), object(), object(), products[token])
+
+    monkeypatch.setattr(workflows, "_run_archive_amplifier_quicklook", fake_run)
+
+    result = workflows.run_virus_ifu_quicklooks(
+        exposure,
+        trace_root=tmp_path,
+        frame_type="twi",
+        nworkers=2,
+        timing=True,
+        memory_check=True,
+    )
+
+    ifu = result.ifus["074"]
+    assert ifu.product is not None
+    assert len(ifu.product.fiber_values) == 448
+    assert ifu.product.image.shape[0] > 20
+    assert ifu.product.image.shape[1] > 10
+    assert ifu.diagnostics.worker_count == 2
+    assert ifu.diagnostics.retained_array_bytes > 0
+    assert "ifu.composition" in ifu.diagnostics.stage_seconds
+    assert set(result.diagnostics) == {"074"}
+    assert len(thread_names) == 2

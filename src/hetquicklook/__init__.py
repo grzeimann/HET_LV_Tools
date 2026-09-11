@@ -54,6 +54,7 @@ from .topology import (
 from .workflows import (
     AmplifierQuicklookEvidence,
     AmplifierTopologyResult,
+    QuicklookDiagnostics,
     QuicklookError,
     LRS2AmplifierQuicklookEvidence,
     LRS2ChannelQuicklook,
@@ -144,6 +145,7 @@ __all__ = [
     "VIRUSIFUQuicklookSet",
     "VIRUSQuicklookSet",
     "AmplifierTopologyResult",
+    "QuicklookDiagnostics",
     "QuicklookError",
     "build_amplifier_topology",
     "combine_lrs2_channel_products",

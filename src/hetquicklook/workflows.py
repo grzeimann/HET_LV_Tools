@@ -2,10 +2,20 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from pathlib import Path
+from time import perf_counter
+from threading import Lock
 from typing import TYPE_CHECKING, Mapping
+import sys
+
+try:
+    import resource
+except ImportError:  # pragma: no cover - resource is Unix-specific
+    resource = None
 
 import numpy as np
 
@@ -61,6 +71,89 @@ VIRUS_STANDARD_FIDUCIAL = VIRUS_SPATIAL_DEFAULTS["intended_fiducial"]
 
 class QuicklookError(RuntimeError):
     """Raised when an archive-backed quick look cannot complete."""
+
+
+@dataclass(frozen=True)
+class QuicklookDiagnostics:
+    """Optional timing and memory evidence for one quick-look operation."""
+
+    stage_seconds: Mapping[str, float] = field(default_factory=dict)
+    retained_array_bytes: int = 0
+    peak_rss_bytes: int | None = None
+    worker_count: int = 1
+
+
+@contextmanager
+def _timed_stage(
+    timings: dict[str, float], name: str, enabled: bool
+):
+    """Record one wall-clock stage when diagnostics are enabled."""
+
+    if not enabled:
+        yield
+        return
+    started = perf_counter()
+    try:
+        yield
+    finally:
+        timings[name] = perf_counter() - started
+
+
+def _peak_rss_bytes() -> int | None:
+    """Return process peak RSS in bytes when the platform exposes it."""
+
+    if resource is None:
+        return None
+    value = int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
+    # macOS reports bytes; Linux and the other common Unix implementations
+    # report KiB.
+    return value if sys.platform == "darwin" else value * 1024
+
+
+def _algorithm_array_bytes(result: AlgorithmResult) -> int:
+    """Return the memory held by an algorithm result's NumPy arrays."""
+
+    return sum(
+        int(np.asarray(value).nbytes)
+        for value in result.arrays.values()
+        if isinstance(value, np.ndarray)
+    )
+
+
+def _spatial_array_bytes(result: SpatialQuicklook) -> int:
+    """Return the NumPy memory retained by a spatial quick-look product."""
+
+    arrays = (
+        result.image,
+        result.spatial_weight,
+        result.spatial_support,
+        result.spatial_x_coordinates,
+        result.spatial_y_coordinates,
+        result.extracted_spectra,
+        result.extraction_variance,
+        result.extraction_valid_fraction,
+        result.effective_aperture_width,
+        result.extraction_valid,
+    )
+    return sum(int(np.asarray(value).nbytes) for value in arrays if isinstance(value, np.ndarray))
+
+
+def _amplifier_array_bytes(
+    loaded: "RawFrameData",
+    detector: AlgorithmResult,
+    topology: AmplifierTopologyResult,
+    product: SpatialQuicklook,
+) -> int:
+    """Estimate arrays retained by one amplifier evidence record."""
+
+    raw_data = getattr(loaded, "data", None)
+    raw_bytes = 0 if not isinstance(raw_data, np.ndarray) else int(raw_data.nbytes)
+    return (
+        raw_bytes
+        + _algorithm_array_bytes(detector)
+        + _algorithm_array_bytes(topology.trace_result)
+        + _spatial_array_bytes(product)
+    )
 
 
 def spatial_defaults_for(
@@ -191,6 +284,7 @@ class LRS2AmplifierQuicklookEvidence:
     detector: AlgorithmResult
     topology: AmplifierTopologyResult
     product: SpatialQuicklook
+    diagnostics: QuicklookDiagnostics = field(default_factory=QuicklookDiagnostics)
 
 
 @dataclass(frozen=True)
@@ -207,6 +301,7 @@ class AmplifierQuicklookEvidence:
     detector: AlgorithmResult
     topology: AmplifierTopologyResult
     product: SpatialQuicklook
+    diagnostics: QuicklookDiagnostics = field(default_factory=QuicklookDiagnostics)
 
 
 @dataclass(frozen=True)
@@ -232,6 +327,8 @@ class VIRUSIFUQuicklookSet:
 
     ifu_slot: str
     amplifier_evidence: Mapping[str, AmplifierQuicklookEvidence]
+    product: SpatialQuicklook | None = None
+    diagnostics: QuicklookDiagnostics = field(default_factory=QuicklookDiagnostics)
 
     @property
     def amplifier_products(self) -> dict[str, SpatialQuicklook]:
@@ -254,6 +351,7 @@ class VIRUSQuicklookSet:
     """
 
     ifus: Mapping[str, VIRUSIFUQuicklookSet]
+    diagnostics: Mapping[str, QuicklookDiagnostics] = field(default_factory=dict)
 
     @property
     def amplifier_evidence(self) -> dict[str, AmplifierQuicklookEvidence]:
@@ -346,6 +444,18 @@ def _required_amplifier_tokens(identity: PhysicalAmplifierIdentity) -> tuple[str
     return tuple(f"{slot}{amplifier}" for amplifier in ("LL", "LU", "RL", "RU"))
 
 
+def _worker_count(requested: int, available: int) -> int:
+    """Validate and cap an amplifier worker count."""
+
+    try:
+        count = int(requested)
+    except (TypeError, ValueError) as error:
+        raise ValueError("nworkers must be a positive integer") from error
+    if count <= 0:
+        raise ValueError("nworkers must be a positive integer")
+    return min(count, max(1, int(available)))
+
+
 def _validate_trace_geometry(
     trace_result: AlgorithmResult,
     *,
@@ -398,6 +508,7 @@ class _QuickTraceProvider:
             tuple[object, ...],
             tuple[AlgorithmResult, TopologyReference, "ArchiveMember"],
         ] = {}
+        self._cache_lock = Lock()
 
     def _select_candidate(
         self,
@@ -542,7 +653,8 @@ class _QuickTraceProvider:
             5,
             1,
         )
-        cached = self._cache.get(cache_key)
+        with self._cache_lock:
+            cached = self._cache.get(cache_key)
         if cached is not None:
             return cached
 
@@ -601,7 +713,8 @@ class _QuickTraceProvider:
             ) from error
 
         resolved = (trace_result, trace_provenance, selected_frame)
-        self._cache[cache_key] = resolved
+        with self._cache_lock:
+            self._cache[cache_key] = resolved
         return resolved
 
 
@@ -1075,9 +1188,20 @@ def _run_archive_amplifier_quicklook(
     output_shape: tuple[int, int] | None,
     origin: tuple[float, float] | None,
     trace_provider: _QuickTraceProvider | None,
-) -> tuple["RawFrameData", AlgorithmResult, AmplifierTopologyResult, SpatialQuicklook]:
+    timing: bool = False,
+    memory_check: bool = False,
+    worker_count: int = 1,
+) -> tuple[
+    "RawFrameData",
+    AlgorithmResult,
+    AmplifierTopologyResult,
+    SpatialQuicklook,
+    QuicklookDiagnostics,
+]:
     """Run the shared archive-backed amplifier path once."""
 
+    timings: dict[str, float] = {}
+    total_started = perf_counter() if timing else 0.0
     try:
         identity = exposure.identity_for(frame)
     except Exception as error:
@@ -1092,8 +1216,10 @@ def _run_archive_amplifier_quicklook(
         ) from error
     token = f"{identity.ifu_slot}{identity.amplifier}"
     try:
-        loaded = exposure.load_frame(frame, loader=loader)
-        detector = reduce_amplifier_array(loaded.data, dict(loaded.header))
+        with _timed_stage(timings, "load", timing):
+            loaded = exposure.load_frame(frame, loader=loader)
+        with _timed_stage(timings, "detector_preparation", timing):
+            detector = reduce_amplifier_array(loaded.data, dict(loaded.header))
     except Exception as error:
         raise QuicklookError(
             f"Quick-look failed for exposure {exposure.exposure_id}, "
@@ -1110,14 +1236,15 @@ def _run_archive_amplifier_quicklook(
     detector_column_start: int | None = None
     detector_column_stop: int | None = None
     if trace_provider is not None and quicklook_kind in {"standard", "target"}:
-        trace_result, trace_provenance, trace_source = trace_provider.resolve(
-            exposure,
-            frame,
-            loader=loader,
-            at=at,
-            column_width=collapse_columns,
-            extraction_width=detector_extraction_width,
-        )
+        with _timed_stage(timings, "trace_resolution", timing):
+            trace_result, trace_provenance, trace_source = trace_provider.resolve(
+                exposure,
+                frame,
+                loader=loader,
+                at=at,
+                column_width=collapse_columns,
+                extraction_width=detector_extraction_width,
+            )
         detector_column_start, detector_column_stop = central_column_bounds(
             prepared_full.shape[1], collapse_columns
         )
@@ -1138,18 +1265,19 @@ def _run_archive_amplifier_quicklook(
         )
 
     try:
-        topology_result = build_amplifier_topology(
-            prepared_detector,
-            identity,
-            trace_root=trace_root,
-            at=at,
-            resource_root=resource_root,
-            trace_result=trace_result,
-            trace_provenance=trace_provenance,
-            trace_source=trace_source,
-            detector_column_start=detector_column_start,
-            detector_column_stop=detector_column_stop,
-        )
+        with _timed_stage(timings, "topology", timing):
+            topology_result = build_amplifier_topology(
+                prepared_detector,
+                identity,
+                trace_root=trace_root,
+                at=at,
+                resource_root=resource_root,
+                trace_result=trace_result,
+                trace_provenance=trace_provenance,
+                trace_source=trace_source,
+                detector_column_start=detector_column_start,
+                detector_column_stop=detector_column_stop,
+            )
     except Exception as error:
         raise QuicklookError(
             f"Quick-look failed for exposure {exposure.exposure_id}, "
@@ -1157,61 +1285,84 @@ def _run_archive_amplifier_quicklook(
         ) from error
     instrument = Instrument.from_value(topology_result.physical_identity.instrument)
     try:
-        if quicklook_kind == "flat":
-            product = run_ldls_flat_quicklook(
-                prepared_detector,
-                topology_result.topology,
-                detector_variance=detector_variance,
-                extraction_width=detector_extraction_width,
-                collapse_columns=collapse_columns,
-                statistic=collapse_statistic,
-                gaussian_fwhm=gaussian_fwhm_arcsec,
-                pixel_scale=pixel_scale_arcsec,
-                grid_padding_arcsec=grid_padding_arcsec,
-                instrument=instrument,
-                output_shape=output_shape,
-                origin=origin,
-            )
-        elif quicklook_kind == "standard":
-            product = run_standard_star_quicklook(
-                prepared_detector,
-                topology_result.topology,
-                requested_position=requested_position,
-                detector_variance=detector_variance,
-                extraction_width=detector_extraction_width,
-                collapse_columns=collapse_columns,
-                statistic=collapse_statistic,
-                gaussian_fwhm=gaussian_fwhm_arcsec,
-                pixel_scale=pixel_scale_arcsec,
-                grid_padding_arcsec=grid_padding_arcsec,
-                instrument=instrument,
-                output_shape=output_shape,
-                origin=origin,
-            )
-        elif quicklook_kind == "target":
-            product = _spatial_quicklook(
-                prepared_detector,
-                topology_result.topology,
-                detector_variance=detector_variance,
-                extraction_width=detector_extraction_width,
-                collapse_columns=collapse_columns,
-                statistic=collapse_statistic,
-                gaussian_fwhm=gaussian_fwhm_arcsec,
-                pixel_scale=pixel_scale_arcsec,
-                grid_padding_arcsec=grid_padding_arcsec,
-                instrument=instrument,
-                output_shape=output_shape,
-                origin=origin,
-            )
-        else:
-            raise ValueError(f"Unsupported quicklook_kind: {quicklook_kind!r}")
+        with _timed_stage(timings, "extraction_and_spatial", timing):
+            if quicklook_kind == "flat":
+                product = run_ldls_flat_quicklook(
+                    prepared_detector,
+                    topology_result.topology,
+                    detector_variance=detector_variance,
+                    extraction_width=detector_extraction_width,
+                    collapse_columns=collapse_columns,
+                    statistic=collapse_statistic,
+                    gaussian_fwhm=gaussian_fwhm_arcsec,
+                    pixel_scale=pixel_scale_arcsec,
+                    grid_padding_arcsec=grid_padding_arcsec,
+                    instrument=instrument,
+                    output_shape=output_shape,
+                    origin=origin,
+                )
+            elif quicklook_kind == "standard":
+                product = run_standard_star_quicklook(
+                    prepared_detector,
+                    topology_result.topology,
+                    requested_position=requested_position,
+                    detector_variance=detector_variance,
+                    extraction_width=detector_extraction_width,
+                    collapse_columns=collapse_columns,
+                    statistic=collapse_statistic,
+                    gaussian_fwhm=gaussian_fwhm_arcsec,
+                    pixel_scale=pixel_scale_arcsec,
+                    grid_padding_arcsec=grid_padding_arcsec,
+                    instrument=instrument,
+                    output_shape=output_shape,
+                    origin=origin,
+                )
+            elif quicklook_kind == "target":
+                product = _spatial_quicklook(
+                    prepared_detector,
+                    topology_result.topology,
+                    detector_variance=detector_variance,
+                    extraction_width=detector_extraction_width,
+                    collapse_columns=collapse_columns,
+                    statistic=collapse_statistic,
+                    gaussian_fwhm=gaussian_fwhm_arcsec,
+                    pixel_scale=pixel_scale_arcsec,
+                    grid_padding_arcsec=grid_padding_arcsec,
+                    instrument=instrument,
+                    output_shape=output_shape,
+                    origin=origin,
+                )
+            else:
+                raise ValueError(f"Unsupported quicklook_kind: {quicklook_kind!r}")
     except Exception as error:
         stage = "target extraction" if quicklook_kind == "target" else "quick-look extraction"
         raise QuicklookError(
             f"Quick-look failed for exposure {exposure.exposure_id}, "
             f"amplifier {token}, stage: {stage}, reason: {error}"
         ) from error
-    return loaded, detector, topology_result, product
+    if timing:
+        timings["total"] = perf_counter() - total_started
+    diagnostics = QuicklookDiagnostics(
+        stage_seconds=timings,
+        retained_array_bytes=(
+            _amplifier_array_bytes(loaded, detector, topology_result, product)
+            if memory_check
+            else 0
+        ),
+        peak_rss_bytes=_peak_rss_bytes() if memory_check else None,
+        worker_count=worker_count,
+    )
+    return loaded, detector, topology_result, product, diagnostics
+
+
+def _unpack_archive_quicklook_result(result: tuple[object, ...]):
+    """Accept legacy four-item test adapters while exposing diagnostics."""
+
+    if len(result) == 4:
+        return (*result, QuicklookDiagnostics())
+    if len(result) == 5:
+        return result
+    raise ValueError("archive amplifier quick-look returned an invalid result tuple")
 
 
 def run_lrs2_channel_quicklooks(
@@ -1292,7 +1443,7 @@ def run_lrs2_channel_quicklooks(
     evidence: dict[str, LRS2AmplifierQuicklookEvidence] = {}
     for token in expected_tokens:
         frame = frames_by_token[token]
-        loaded, detector, topology_result, product = _run_archive_amplifier_quicklook(
+        archive_result = _run_archive_amplifier_quicklook(
             exposure,
             frame,
             trace_root=trace_root,
@@ -1311,12 +1462,16 @@ def run_lrs2_channel_quicklooks(
             origin=origin,
             trace_provider=trace_provider,
         )
+        loaded, detector, topology_result, product, diagnostics = (
+            _unpack_archive_quicklook_result(archive_result)
+        )
         evidence[token] = LRS2AmplifierQuicklookEvidence(
             frame=frame,
             loaded=loaded,
             detector=detector,
             topology=topology_result,
             product=product,
+            diagnostics=diagnostics,
         )
 
     channels = combine_lrs2_channels(
@@ -1331,6 +1486,109 @@ def run_lrs2_channel_quicklooks(
         amplifier_evidence=evidence,
         channels=channels,
     )
+
+
+def _compose_virus_ifu_quicklook(
+    amplifier_evidence: Mapping[str, AmplifierQuicklookEvidence],
+    *,
+    ifu_slot: str,
+    gaussian_fwhm_arcsec: float | None,
+    pixel_scale_arcsec: float | None,
+    grid_padding_arcsec: float | None,
+    output_shape: tuple[int, int] | None,
+    origin: tuple[float, float] | None,
+) -> SpatialQuicklook:
+    """Build one IFU image from all four amplifier fiber products."""
+
+    expected_tokens = tuple(f"{ifu_slot}{amp}" for amp in ("LL", "LU", "RL", "RU"))
+    missing = [token for token in expected_tokens if token not in amplifier_evidence]
+    if missing:
+        raise QuicklookError(
+            f"Cannot compose VIRUS IFU {ifu_slot}; missing amplifier product(s): "
+            f"{', '.join(missing)}"
+        )
+
+    fiber_values: dict[str, float] = {}
+    fiber_positions: dict[str, tuple[float, float]] = {}
+    fiber_errors: dict[str, float] = {}
+    first_product = amplifier_evidence[expected_tokens[0]].product
+    all_errors_available = True
+    for token in expected_tokens:
+        product = amplifier_evidence[token].product
+        for fiber_id, value in product.fiber_values.items():
+            if fiber_id in fiber_values:
+                raise QuicklookError(
+                    f"Cannot compose VIRUS IFU {ifu_slot}; duplicate fiber {fiber_id}"
+                )
+            try:
+                position = product.fiber_positions[fiber_id]
+            except KeyError as error:
+                raise QuicklookError(
+                    f"Cannot compose VIRUS IFU {ifu_slot}; missing position for fiber "
+                    f"{fiber_id}"
+                ) from error
+            fiber_values[fiber_id] = float(value)
+            fiber_positions[fiber_id] = (float(position[0]), float(position[1]))
+            if fiber_id in product.fiber_errors:
+                fiber_errors[fiber_id] = float(product.fiber_errors[fiber_id])
+            else:
+                all_errors_available = False
+
+    if not fiber_values:
+        raise QuicklookError(f"Cannot compose VIRUS IFU {ifu_slot}; no fiber values")
+
+    positions = np.asarray(tuple(fiber_positions.values()), dtype=float)
+    values = np.asarray(tuple(fiber_values.values()), dtype=float)
+    errors = (
+        np.asarray(tuple(fiber_errors[fiber_id] for fiber_id in fiber_values), dtype=float)
+        if all_errors_available
+        else None
+    )
+    _, resolved_fwhm, resolved_pixel_scale, _ = _resolve_spatial_parameters(
+        Instrument.VIRUS,
+        gaussian_fwhm=gaussian_fwhm_arcsec,
+        pixel_scale=pixel_scale_arcsec,
+        spatial_defaults=None,
+    )
+    spatial = gaussian_splat(
+        positions,
+        values,
+        errors,
+        fwhm=resolved_fwhm,
+        pixel_scale=resolved_pixel_scale,
+        grid_padding=(
+            grid_padding_arcsec
+            if grid_padding_arcsec is not None
+            else float(VIRUS_SPATIAL_DEFAULTS["grid_padding_arcsec"])
+        ),
+        output_shape=output_shape,
+        origin=origin,
+    )
+    common = dict(
+        fiber_values=fiber_values,
+        image=spatial.image,
+        instrument=Instrument.VIRUS,
+        fiber_positions=fiber_positions,
+        fiber_errors=fiber_errors if all_errors_available else {},
+        spatial_weight=spatial.weight,
+        spatial_support=spatial.support,
+        spatial_x_coordinates=spatial.x_coordinates,
+        spatial_y_coordinates=spatial.y_coordinates,
+        spatial_gaussian_fwhm_arcsec=resolved_fwhm,
+        spatial_pixel_scale_arcsec=resolved_pixel_scale,
+        intended_fiducial=first_product.intended_fiducial,
+        collapse_columns=first_product.collapse_columns,
+        collapse_statistic=first_product.collapse_statistic,
+        extraction_width=first_product.extraction_width,
+    )
+    if isinstance(first_product, PointingQuicklook):
+        measured = weighted_centroid(positions[:, 0], positions[:, 1], values)
+        return PointingQuicklook(
+            **common,
+            measured_centroid=measured,
+            requested_position=first_product.requested_position,
+        )
+    return SpatialQuicklook(**common)
 
 
 def run_virus_ifu_quicklooks(
@@ -1352,11 +1610,15 @@ def run_virus_ifu_quicklooks(
     output_shape: tuple[int, int] | None = None,
     origin: tuple[float, float] | None = None,
     trace_provider: _QuickTraceProvider | None = None,
+    nworkers: int = 1,
+    timing: bool = False,
+    memory_check: bool = False,
 ) -> VIRUSQuicklookSet:
-    """Run archive-backed VIRUS amplifier quick looks grouped by IFU.
+    """Run archive-backed VIRUS amplifier quick looks and compose each IFU.
 
-    This deliberately stops at per-IFU amplifier evidence. No arbitrary
-    amplifier is selected and no whole-VIRUS focal-plane image is inferred.
+    Each complete IFU returns one physical IFU-plane image built from all
+    four amplifier products. The individual amplifier evidence remains
+    available for diagnostics; no whole-VIRUS focal-plane image is inferred.
     """
 
     exposure_instruments = {
@@ -1412,9 +1674,10 @@ def run_virus_ifu_quicklooks(
             "VIRUS IFU amplifier frames found"
         )
 
-    ifus: dict[str, VIRUSIFUQuicklookSet] = {}
-    for slot in sorted(frames_by_ifu):
-        by_amplifier = frames_by_ifu[slot]
+    # Validate every discovered IFU before loading any detector data. This
+    # keeps structural archive failures fail-fast even when several IFUs are
+    # present in one exposure.
+    for slot, by_amplifier in frames_by_ifu.items():
         missing = tuple(
             f"{slot}{amplifier}"
             for amplifier in expected_amplifiers
@@ -1427,11 +1690,16 @@ def run_virus_ifu_quicklooks(
                 f"missing required amplifier frame(s): {', '.join(missing)}"
             )
 
-        evidence: dict[str, AmplifierQuicklookEvidence] = {}
-        for amplifier in expected_amplifiers:
+    ifus: dict[str, VIRUSIFUQuicklookSet] = {}
+    ifu_diagnostics: dict[str, QuicklookDiagnostics] = {}
+    for slot in sorted(frames_by_ifu):
+        by_amplifier = frames_by_ifu[slot]
+        worker_count = _worker_count(nworkers, len(expected_amplifiers))
+        ifu_started = perf_counter() if timing else 0.0
+
+        def process_amplifier(amplifier: str):
             frame = by_amplifier[amplifier]
-            token = f"{slot}{amplifier}"
-            loaded, detector, topology_result, product = _run_archive_amplifier_quicklook(
+            result = _run_archive_amplifier_quicklook(
                 exposure,
                 frame,
                 trace_root=trace_root,
@@ -1449,19 +1717,91 @@ def run_virus_ifu_quicklooks(
                 output_shape=output_shape,
                 origin=origin,
                 trace_provider=trace_provider,
+                timing=timing,
+                memory_check=memory_check,
+                worker_count=worker_count,
             )
+            return _unpack_archive_quicklook_result(result)
+
+        processed: dict[str, tuple[object, ...]] = {}
+        if worker_count == 1:
+            for amplifier in expected_amplifiers:
+                processed[amplifier] = process_amplifier(amplifier)
+        else:
+            with ThreadPoolExecutor(max_workers=worker_count) as executor:
+                futures = {
+                    executor.submit(process_amplifier, amplifier): amplifier
+                    for amplifier in expected_amplifiers
+                }
+                try:
+                    for future in as_completed(futures):
+                        processed[futures[future]] = future.result()
+                except Exception:
+                    for future in futures:
+                        future.cancel()
+                    raise
+
+        evidence: dict[str, AmplifierQuicklookEvidence] = {}
+        for amplifier in expected_amplifiers:
+            loaded, detector, topology_result, product, diagnostics = processed[amplifier]
+            token = f"{slot}{amplifier}"
             evidence[token] = AmplifierQuicklookEvidence(
-                frame=frame,
+                frame=by_amplifier[amplifier],
                 loaded=loaded,
                 detector=detector,
                 topology=topology_result,
                 product=product,
+                diagnostics=diagnostics,
             )
+
+        composition_timings: dict[str, float] = {}
+        with _timed_stage(composition_timings, "composition", timing):
+            product = _compose_virus_ifu_quicklook(
+                evidence,
+                ifu_slot=slot,
+                gaussian_fwhm_arcsec=gaussian_fwhm_arcsec,
+                pixel_scale_arcsec=pixel_scale_arcsec,
+                grid_padding_arcsec=grid_padding_arcsec,
+                output_shape=output_shape,
+                origin=origin,
+            )
+        if timing:
+            composition_timings["total"] = perf_counter() - ifu_started
+        stage_seconds = {
+            f"amplifier.{token}.{stage}": seconds
+            for token, item in evidence.items()
+            for stage, seconds in item.diagnostics.stage_seconds.items()
+        }
+        stage_seconds.update(
+            {f"ifu.{stage}": seconds for stage, seconds in composition_timings.items()}
+        )
+        retained_bytes = (
+            sum(item.diagnostics.retained_array_bytes for item in evidence.values())
+            + (_spatial_array_bytes(product) if memory_check else 0)
+        )
+        peak_values = [
+            item.diagnostics.peak_rss_bytes
+            for item in evidence.values()
+            if item.diagnostics.peak_rss_bytes is not None
+        ]
+        if memory_check:
+            current_peak = _peak_rss_bytes()
+            if current_peak is not None:
+                peak_values.append(current_peak)
+        diagnostics = QuicklookDiagnostics(
+            stage_seconds=stage_seconds,
+            retained_array_bytes=retained_bytes,
+            peak_rss_bytes=max(peak_values) if peak_values else None,
+            worker_count=worker_count,
+        )
         ifus[slot] = VIRUSIFUQuicklookSet(
             ifu_slot=slot,
             amplifier_evidence=evidence,
+            product=product,
+            diagnostics=diagnostics,
         )
-    return VIRUSQuicklookSet(ifus=ifus)
+        ifu_diagnostics[slot] = diagnostics
+    return VIRUSQuicklookSet(ifus=ifus, diagnostics=ifu_diagnostics)
 
 
 def _canonical_lrs2_channel_products(

@@ -159,7 +159,10 @@ class VirusTopologyLoader:
             raise ValueError(
                 f"VIRUS fiber-position resource must provide 448 rows and 4 selected columns: {path}"
             )
-        positions = table[:, (1, 3)].copy()
+        # ``table`` contains original columns 1, 2, and 4 at positions
+        # 1, 2, and 3 respectively.  IFU coordinates are the source file's
+        # x/y columns, not the target fiber-number column.
+        positions = table[:, (1, 2)].copy()
         if normalized_ifuid in _VIRUS_RIGHT_REVERSALS:
             positions[224:448] = positions[224:448][::-1]
         swap = _VIRUS_COORDINATE_SWAPS.get(normalized_ifuid)
