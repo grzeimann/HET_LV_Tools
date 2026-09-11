@@ -8,6 +8,7 @@ from time import perf_counter
 from typing import Any
 
 import numpy as np
+from scipy.ndimage import percentile_filter
 
 from .results import AlgorithmResult
 
@@ -175,7 +176,7 @@ def _fast_polyfit_predict(
 
 
 def _percentile_filter_1d(values: np.ndarray, window: int, percentile: float) -> np.ndarray:
-    """Apply a nearest-edge one-dimensional percentile filter."""
+    """Apply a nearest-edge one-dimensional finite percentile filter."""
 
     data = np.asarray(values, dtype=float).ravel()
     if data.size == 0:
@@ -184,14 +185,16 @@ def _percentile_filter_1d(values: np.ndarray, window: int, percentile: float) ->
     if size % 2 == 0:
         size += 1
     size = min(size, 2 * data.size - 1) if data.size > 1 else 1
+    if not np.all(np.isfinite(data)):
+        raise ValueError("flat trace-detection profile contains non-finite values")
     if size <= 1:
         return data.copy()
-    half = size // 2
-    padded = np.pad(data, half, mode="edge")
-    windows = np.lib.stride_tricks.sliding_window_view(padded, size)
-    with np.errstate(all="ignore"):
-        result = np.nanpercentile(windows, percentile, axis=-1)
-    return result
+    return percentile_filter(
+        data,
+        percentile=percentile,
+        size=size,
+        mode="nearest",
+    )
 
 
 def _gaussian_smooth_1d(values: np.ndarray, sigma: float) -> np.ndarray:

@@ -24,6 +24,27 @@ from hetquicklook.algorithms.spatial import gaussian_splat
 from hetquicklook.algorithms.trace import fit_fiber_traces
 
 
+def _legacy_percentile_filter_1d(
+    values: np.ndarray, window: int, percentile: float
+) -> np.ndarray:
+    """Reference implementation for finite-input percentile-filter tests."""
+
+    data = np.asarray(values, dtype=float).ravel()
+    if data.size == 0:
+        return data.copy()
+    size = max(3, int(window))
+    if size % 2 == 0:
+        size += 1
+    size = min(size, 2 * data.size - 1) if data.size > 1 else 1
+    if size <= 1:
+        return data.copy()
+    half = size // 2
+    padded = np.pad(data, half, mode="edge")
+    windows = np.lib.stride_tricks.sliding_window_view(padded, size)
+    with np.errstate(all="ignore"):
+        return np.nanpercentile(windows, percentile, axis=-1)
+
+
 def test_all_canonical_standard_names_are_exact_members() -> None:
     assert len(STANDARD_STAR_NAMES) == 45
     for name in STANDARD_STAR_NAMES:
@@ -81,6 +102,96 @@ def test_detector_orientation_preserves_both_axis_flip(amplifier: str) -> None:
     )
     np.testing.assert_array_equal(
         orient_amplifier_image(image, "LL", "UL"), [[2, 1, 0], [5, 4, 3]]
+    )
+
+
+def test_percentile_filter_matches_finite_reference() -> None:
+    profile = np.linspace(10.0, 30.0, 1032)
+    profile[::17] += 2.0
+
+    result = trace_algorithm._percentile_filter_1d(profile, 201, 5.0)
+    expected = _legacy_percentile_filter_1d(profile, 201, 5.0)
+
+    np.testing.assert_allclose(result, expected, rtol=0.0, atol=0.0)
+
+
+def test_percentile_filter_preserves_nearest_edges_for_production_window() -> None:
+    profile = np.resize(np.array([3.0, 1.0, 8.0, 2.0, 5.0, 4.0]), 1032)
+
+    result = trace_algorithm._percentile_filter_1d(profile, 201, 5.0)
+    expected = _legacy_percentile_filter_1d(profile, 201, 5.0)
+
+    np.testing.assert_array_equal(result, expected)
+    np.testing.assert_array_equal(result[[0, 1, -2, -1]], expected[[0, 1, -2, -1]])
+
+
+def test_percentile_filter_preserves_short_array_window_normalization(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    profile = np.array([3.0, 1.0, 8.0, 2.0, 5.0, 4.0])
+    observed_sizes: list[int] = []
+
+    def fake_percentile_filter(
+        data: np.ndarray, *, percentile: float, size: int, mode: str
+    ) -> np.ndarray:
+        del percentile, mode
+        observed_sizes.append(size)
+        return np.zeros_like(data)
+
+    monkeypatch.setattr(
+        trace_algorithm, "percentile_filter", fake_percentile_filter
+    )
+    for window in (1, 3, 4, 99):
+        result = trace_algorithm._percentile_filter_1d(profile, window, 5.0)
+        assert result.shape == profile.shape
+    assert observed_sizes == [3, 3, 5, 11]
+
+    empty = trace_algorithm._percentile_filter_1d(np.array([], dtype=float), 201, 5.0)
+    assert empty.shape == (0,)
+
+
+def test_percentile_filter_rejects_nonfinite_trace_profile() -> None:
+    with pytest.raises(
+        ValueError,
+        match="flat trace-detection profile contains non-finite values",
+    ):
+        trace_algorithm._percentile_filter_1d(
+            np.array([1.0, np.nan, 3.0]), 3, 5.0
+        )
+
+
+def test_quick_trace_matches_legacy_percentile_detection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    flat, reference = _synthetic_flat(20)
+    scipy_percentile_filter = trace_algorithm._percentile_filter_1d
+    kwargs = {
+        "n_chunks": 5,
+        "degree": 1,
+        "fit_method": "fast",
+        "detector_column_start": 11,
+    }
+    monkeypatch.setattr(
+        trace_algorithm,
+        "_percentile_filter_1d",
+        _legacy_percentile_filter_1d,
+    )
+    legacy = fit_fiber_traces(flat[:, 11:61], reference, **kwargs)
+
+    monkeypatch.setattr(
+        trace_algorithm,
+        "_percentile_filter_1d",
+        scipy_percentile_filter,
+    )
+    scipy = fit_fiber_traces(flat[:, 11:61], reference, **kwargs)
+
+    np.testing.assert_array_equal(
+        scipy.get_array("sampled_trace_positions"),
+        legacy.get_array("sampled_trace_positions"),
+    )
+    np.testing.assert_array_equal(
+        scipy.get_array("fiber_trace_map"),
+        legacy.get_array("fiber_trace_map"),
     )
 
 
