@@ -114,6 +114,41 @@ def test_site_default_trace_root_is_independent_of_working_directory(
     assert site.trace_root == Path(highlevel.__file__).resolve().parents[2]
 
 
+def test_night_update_refreshes_the_existing_inventory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    first = _observation(tmp_path, "obs-1", [("exp-1", "sci", "first")])
+    second = _observation(
+        tmp_path,
+        "obs-2",
+        [("exp-2", "sci", "second"), ("exp-3", "sci", "third")],
+    )
+    discovered_values = iter(((first.discovered,), (second.discovered,)))
+    loaded_values = iter((first, second))
+    monkeypatch.setattr(
+        highlevel,
+        "discover_observations",
+        lambda *args, **kwargs: next(discovered_values),
+    )
+    monkeypatch.setattr(
+        highlevel,
+        "load_observation",
+        lambda *args, **kwargs: next(loaded_values),
+    )
+
+    site = QuicklookSite(raw_roots={"lrs2": tmp_path}, trace_root=tmp_path)
+    night = site.night("20260512", instrument="lrs2")
+    assert [item.exposure_id for item in night] == ["exp-1"]
+
+    refreshed = night.update()
+
+    assert refreshed is night
+    assert night.site is site
+    assert [item.exposure_id for item in night] == ["exp-2", "exp-3"]
+    assert "exp-2" in night._repr_html_()
+    assert "exp-1" not in night._repr_html_()
+
+
 def test_night_html_is_compact_and_escapes_metadata(tmp_path: Path) -> None:
     observation = _observation(
         tmp_path,
@@ -232,6 +267,14 @@ def test_virus_product_plot_without_ifu_uses_the_focal_plane_grid() -> None:
         if axis.get_title() in {"074", "075"}
     }
     assert set(image_axes) == {"074", "075"}
+    assert not {
+        "054",
+        "055",
+        "056",
+        "064",
+        "065",
+        "066",
+    }.intersection(axis.get_title() for axis in figure.axes)
     assert image_axes["074"].get_position().y0 > image_axes["075"].get_position().y0
     assert len(figure.axes) >= 100
     assert image_axes["074"].images[0].get_cmap().name == "magma"

@@ -92,7 +92,7 @@ ROOT/
     virus/
       observation.tar
     lrs2/
-      observation.tar.gz
+      observation.tar
 ```
 
 VIRUS Corral date archives are also supported:

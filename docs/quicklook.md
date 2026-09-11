@@ -15,17 +15,20 @@ ql = QuicklookSite(
     },
 )
 
-night = ql.night("20260512", instrument="lrs2")
-night
+LRS2Night = ql.night("20260512", instrument="lrs2")
+LRS2Night
 
-exposure = night[25]  # choose another row from the displayed table as needed
+# Later in the night, rediscover new archives in place.
+LRS2Night.update()
+
+exposure = LRS2Night[25]  # choose another row from the displayed table as needed
 product = exposure.quicklook()
 product.plot()
 ```
 
-Evaluating `night` in Jupyter displays one compact row per encoded exposure,
+Evaluating `LRS2Night` in Jupyter displays one compact row per encoded exposure,
 including exposures from multiple observation archives. Rows use zero-based
-Python indexing, so `night[19]` selects the row labelled `19`. The selected
+Python indexing, so `LRS2Night[19]` selects the row labelled `19`. The selected
 `QuicklookExposure` retains its `observation`, `raw_exposure`, `metadata`, and
 `classification` attributes.
 
@@ -59,8 +62,10 @@ fibers. A present amplifier that fails quick-look reduction is available in
 `product.ifus["095"].unavailable_amplifiers` with its failure reason; missing
 raw amplifier files remain hard errors. With no `ifu` argument, `product.plot()` renders the
 available IFU images in the authoritative 10-by-10 focal-plane layout, with
-each slot labelled in its physical position. Pass `ifu="074"` to render one
-IFU directly. The individual amplifier views remain available through
+each VIRUS slot labelled in its physical position. The positions occupied by
+other instruments (`054`, `055`, `056`, `064`, `065`, and `066`) are left
+blank. Pass `ifu="074"` to render one IFU directly. The individual amplifier
+views remain available through
 `product.ifus["074"].plot_amplifiers()` when the quick look was run with
 `detailed_evidence=True`.
 
@@ -76,7 +81,11 @@ in-memory evidence options remain available for direct inspection.
 `QuicklookSite` resolves the repository's dated `Fiber_Locations` tree from
 the installed package location, so the notebook working directory does not
 affect normal trace lookup. An explicit `trace_root` may still be supplied for
-an alternate external trace deployment.
+an alternate external trace deployment. Calling `LRS2Night.update()` rediscovers
+the same date and instrument through that site, reloads the observation
+metadata, and refreshes the table and exposure wrappers in place. Its return
+value is the same night object, so evaluating `LRS2Night.update()` in a
+notebook renders the refreshed table immediately.
 
 # Low-level quick-look workflows
 

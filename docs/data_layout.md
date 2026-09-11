@@ -9,7 +9,7 @@ ROOT/
     virus/
       observation.tar
     lrs2/
-      observation.tar.gz
+      observation.tar
 ```
 
 Date directory names may use `YYYYMMDD`, `YYYY-MM-DD`, or `YYYY_MM_DD`.

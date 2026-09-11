@@ -198,9 +198,9 @@ class QuicklookSite:
         )
 
 
-@dataclass(frozen=True)
+@dataclass
 class QuicklookNight:
-    """A stable, flattened exposure inventory for one date and instrument."""
+    """A refreshable, flattened exposure inventory for one date and instrument."""
 
     site: QuicklookSite
     date: str | date
@@ -212,7 +212,13 @@ class QuicklookNight:
 
     def __post_init__(self) -> None:
         parsed = Instrument.from_value(self.instrument)
-        object.__setattr__(self, "instrument", parsed)
+        self.instrument = parsed
+        self._rebuild()
+
+    def _rebuild(self) -> None:
+        """Rebuild wrappers and trace lookup from the current observations."""
+
+        parsed = Instrument.from_value(self.instrument)
         if len(self.discovered) != len(self.observations):
             raise ValueError("discovered and observations must have matching lengths")
         entries: list[QuicklookExposure] = []
@@ -230,20 +236,33 @@ class QuicklookNight:
                         row=len(entries),
                     )
                 )
-        object.__setattr__(self, "_exposures", tuple(entries))
+        self._exposures = tuple(entries)
         candidates = tuple(
             (raw_exposure, observation.discovered.date)
             for observation in self.observations
             for raw_exposure in observation.exposures
         )
-        object.__setattr__(
-            self,
-            "_trace_provider",
-            workflows._QuickTraceProvider(
-                candidates,
-                trace_root=self.site.trace_root,
-            ),
+        self._trace_provider = workflows._QuickTraceProvider(
+            candidates,
+            trace_root=self.site.trace_root,
         )
+
+    def update(self) -> "QuicklookNight":
+        """Rediscover this night and refresh its table and exposure wrappers."""
+
+        discovered = discover_observations(
+            self.site.config_for(self.instrument),
+            instrument=self.instrument,
+            date=self.date,
+        )
+        observations = tuple(
+            load_observation(item, standard_catalog=self.site.standard_catalog)
+            for item in discovered
+        )
+        self.discovered = discovered
+        self.observations = observations
+        self._rebuild()
+        return self
 
     @property
     def exposures(self) -> tuple["QuicklookExposure", ...]:

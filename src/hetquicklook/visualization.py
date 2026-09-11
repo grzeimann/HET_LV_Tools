@@ -14,6 +14,10 @@ from .workflows import LRS2ChannelQuicklook, PointingQuicklook, SpatialQuicklook
 
 QuicklookResult = SpatialQuicklook | LRS2ChannelQuicklook
 
+# These focal-plane positions are occupied by LRS2 or other instruments and
+# must remain blank in the full VIRUS layout.
+_VIRUS_NON_VIRUS_SLOTS = frozenset({"054", "055", "056", "064", "065", "066"})
+
 
 def finite_limits(
     values: np.ndarray,
@@ -429,7 +433,10 @@ def plot_virus_ifu_grid(
     products = {
         str(slot).strip().zfill(3): product
         for slot, product in ifu_products.items()
+        if str(slot).strip().zfill(3) not in _VIRUS_NON_VIRUS_SLOTS
     }
+    if not products:
+        raise ValueError("ifu_products must contain at least one VIRUS IFU")
     unknown = sorted(set(products) - set(focal_plane))
     if unknown:
         raise ValueError(
@@ -440,7 +447,7 @@ def plot_virus_ifu_grid(
     positions = {
         slot: (float(position[0]), float(position[1]))
         for slot, position in focal_plane.items()
-        if slot != "000"
+        if slot not in {"000", *_VIRUS_NON_VIRUS_SLOTS}
     }
     x_coordinates = sorted({position[0] for position in positions.values()})
     y_coordinates = sorted(
