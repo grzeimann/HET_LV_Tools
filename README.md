@@ -4,10 +4,11 @@
 of the Hobby–Eberly Telescope (HET) VIRUS and LRS2 instruments. The Python
 package is named `hetquicklook`.
 
-The project is aimed at daily RA OPS checks using LDLS flats and standard-star
-observations. It turns the detector and fiber information already present in
-HET data into inspectable spatial and pointing evidence without reproducing the
-full VIRUS or LRS2 reduction pipelines.
+The project is aimed at daily RA OPS checks using LDLS and Qth flats,
+standard-star observations, and other science or calibration frames. It turns
+the detector and fiber information already present in HET data into inspectable
+spatial and pointing evidence without reproducing the full VIRUS or LRS2
+reduction pipelines.
 
 - Getting started: [Installation](docs/installation.md) · [Quick-look workflows](docs/quicklook.md)
 - Data and instrument information: [Data layout](docs/data_layout.md) · [VIRUS](docs/virus.md) · [LRS2](docs/lrs2.md)
@@ -57,9 +58,11 @@ print(observation.exposure_ids)
 
 ## Interactive quickstart
 
-For routine notebook use, configure the raw and trace roots once, then choose
-a night, select an exposure from its compact HTML inventory, and display the
-instrument quick look:
+For routine notebook use, configure the raw roots once, then choose a night,
+select an exposure from its compact HTML inventory, and display the instrument
+quick look. In a source or editable installation, dated trace resources are
+resolved from this repository by default; pass `trace_root=...` to
+`QuicklookSite` when using an external trace deployment:
 
 ```python
 from hetquicklook import QuicklookSite
@@ -67,17 +70,27 @@ from hetquicklook import QuicklookSite
 ql = QuicklookSite(
     raw_roots={"lrs2": "~/data/LRS2", "virus": "~/data/VIRUS"},
 )
-night = ql.night("20260512", instrument="lrs2")
-night
-product = night[25].quicklook()  # choose another row from the displayed table as needed
-product.plot()
+LRS2Night = ql.night("20260512", instrument="lrs2")
+LRS2Night
+LRS2_product = LRS2Night[25].quicklook()  # choose a row from the displayed table
+LRS2_figure = LRS2_product.plot(cmap="coolwarm")
+
+VIRUSNight = ql.night("20260609", instrument="virus")
+VIRUSNight
+VIRUS_product = VIRUSNight[11].quicklook()  # choose a row from the displayed table
+VIRUS_figure = VIRUS_product.plot(cmap="coolwarm")
+
+# Run this again later to refresh the same table and night object.
+LRS2Night.update()
 ```
 
-The selected exposure and product retain the underlying observations,
-classification, archive-member provenance, detector results, topology and
-trace evidence, amplifier products, and channel products. See the
-[interactive quick-start guide](docs/quicklook.md) for selection, partial
-evidence, and advanced inspection.
+The selected exposure retains its observation, classification, and
+archive-member provenance. The resulting product retains collapsed fiber and
+spatial results, amplifier-level evidence, and complete LRS2 channel products.
+Use `exposure.quicklook(detailed_evidence=True)` when detector arrays and
+extracted spectra are needed for detailed inspection. See the
+[interactive quick-start guide](docs/quicklook.md) for evidence retention,
+instrument-specific products, and advanced inspection.
 
 For the detector-to-fiber workflow and result objects, see the [quick-look
 workflow guide](docs/quicklook.md) and the notebook.
@@ -107,7 +120,8 @@ ROOT/
 
 The package inventories what is present, including malformed members, partial
 amplifier sets, nested archive provenance, and archives containing multiple
-exposure IDs. It does not infer completeness during discovery.
+exposure IDs. It does not infer completeness during discovery. The discovery
+layer recognizes `.tar`, `.tar.gz`, `.tgz`, `.tar.bz2`, and `.tar.xz` archives.
 
 Static VIRUS and LRS2 fiber-position resources are packaged with
 `hetquicklook`. Dated detector traces are supplied through a trace root with
@@ -129,8 +143,9 @@ forms.
 The current package and notebook provide:
 
 * exposure-level FITS metadata, explicit header disagreements, filename
-  identities, and deterministic classification of LDLS flats and standard
-  stars;
+  identities, and deterministic classification of LDLS or Qth flats and
+  catalog-matched standard stars, with all other frame types dispatched to the
+  general target spatial quick-look path;
 * explicit VIRUS and LRS2 instrument topology, packaged IFU-plane positions,
   and dated fiber-trace resolution from `Fiber_Locations`;
 * detector preparation with overscan subtraction, trimming, amplifier
@@ -145,9 +160,10 @@ The current package and notebook provide:
 * complete LRS2 quick looks that process eight amplifier products independently
   and compose them into the four UV, Orange, Red, and Far-Red channel products
   while retaining amplifier-level evidence; and
-* high-level site, night, exposure, and product wrappers with compact exposure
-  inventories, automatic flat/standard dispatch, partial-channel evidence,
-  and instrument-aware plotting.
+* high-level site, night, exposure, and product wrappers with compact and
+  refreshable exposure inventories, automatic flat/standard/target dispatch,
+  per-IFU and full VIRUS focal-plane plots, complete LRS2 channel plots, and
+  display controls such as `cmap`, `vmin`, and `vmax`.
 
 The default quick-look settings are:
 
@@ -156,8 +172,14 @@ The default quick-look settings are:
 | Fractional extraction width | 5 detector pixels | 5 detector pixels |
 | Collapse window/statistic | central 200 columns, median | central 200 columns, median |
 | Gaussian-splat FWHM | 1.8 arcsec | 1.2 arcsec |
+| Spatial-grid padding | 1.5 arcsec | 0.3 arcsec |
 | Output pixel scale | 1.0 arcsec/pixel | 0.4 arcsec/pixel |
 | Standard-star fiducial | `(0, 0)` in selected IFU | `(0, 0)` in LRS2 IFU |
+
+`grid_padding_arcsec` pads the inferred image bounds around the physical fiber
+coordinates. It changes the output extent, not the fiber positions or the
+Gaussian reconstruction kernel. Override it per exposure, for example with
+`exposure.quicklook(grid_padding_arcsec=2.0)`.
 
 These products are intended to help an observer inspect obscuration,
 contamination, illumination structure, blocked or dim fibers, trace behavior,
@@ -168,31 +190,23 @@ grades.
 ## Notebook and presentation work
 
 The [observer quickstart notebook](notebooks/hetquicklook_presentation_playground.ipynb)
-walks through the current archive-to-result path on real VIRUS or LRS2 data:
-discovery, exposure metadata, one-amplifier inspection, topology and trace
-provenance, quick-look results, and LRS2 channel composition. Its presentation
-views include reconstructed spatial images, fiber-level values, standard-star
-fiducials and centroids, spatial support, and lower-level trace or extraction
-evidence when a result needs investigation.
+is written for an observer who wants a small number of repeatable notebook
+steps. It opens example `VIRUSNight` and `LRS2Night` inventories, shows example
+standard-star, flat, and long-science selections, uses the `coolwarm` colormap,
+and demonstrates refreshing a night with `.update()`. The package's lower-level
+workflow and detailed evidence options are documented in
+[quicklook.md](docs/quicklook.md).
 
 The notebook is deliberately exploratory. Display stretches and figure layout
 can change without changing the stored scientific results.
 
-## Near-term goals
-
-The next development work is to:
-
-* evaluate the high-level workflow on representative LRS2 flat and
-  standard-star observations, followed by a VIRUS IFU;
-* promote additional useful notebook views into reusable package
-  visualizations, including a VIRUS IFU or whole-focal-plane overview;
-* evaluate centroid and display choices on real observations before defining
-  evidence-based operational thresholds.
+## Current limitations
 
 The current scope stops at wavelength-independent quick-look evidence. It does
 not yet provide wavelength calibration, sky modeling, differential atmospheric
 refraction correction, production spectrophotometric calibration, seeing
-estimation, or automated quality policy.
+estimation, or automated quality policy. Operational thresholds and further
+validation on representative observations remain future work.
 
 ## Testing and development
 
