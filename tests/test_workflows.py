@@ -121,7 +121,7 @@ def test_workflow_selects_instrument_spatial_defaults_and_pads_bounds() -> None:
 
     assert VIRUS_SPATIAL_DEFAULTS["gaussian_fwhm_arcsec"] == 1.5
     assert VIRUS_SPATIAL_DEFAULTS["pixel_scale_arcsec"] == 1.0
-    assert VIRUS_SPATIAL_DEFAULTS["grid_padding_arcsec"] == 1.1
+    assert VIRUS_SPATIAL_DEFAULTS["grid_padding_arcsec"] == 1.5
     assert LRS2_SPATIAL_DEFAULTS["gaussian_fwhm_arcsec"] == 1.2
     assert LRS2_SPATIAL_DEFAULTS["pixel_scale_arcsec"] == 0.4
     assert LRS2_SPATIAL_DEFAULTS["grid_padding_arcsec"] == 0.3

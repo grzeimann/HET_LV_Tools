@@ -51,7 +51,7 @@ if TYPE_CHECKING:
 VIRUS_SPATIAL_DEFAULTS = {
     "gaussian_fwhm_arcsec": 1.5,
     "pixel_scale_arcsec": 1.0,
-    "grid_padding_arcsec": 1.1,
+    "grid_padding_arcsec": 1.5,
     "intended_fiducial": (0.0, 0.0),
 }
 LRS2_SPATIAL_DEFAULTS = {

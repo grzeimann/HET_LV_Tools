@@ -99,3 +99,7 @@ def test_virus_ifu_grid_uses_focal_plane_slots() -> None:
     image_axes = [axis for axis in figure.axes if axis.get_title() in {"074", "075"}]
     assert len(image_axes) == 2
     assert len(figure.axes) >= 100
+    title = image_axes[0].title
+    assert title.get_color() == "white"
+    assert len(title.get_path_effects()) == 2
+    assert title.get_bbox_patch().get_facecolor()[:3] == (0.0, 0.0, 0.0)

@@ -374,6 +374,7 @@ def plot_virus_ifu_grid(
 ) -> Any:
     """Render VIRUS IFU images in the authoritative focal-plane layout."""
 
+    import matplotlib.patheffects as pe
     import matplotlib.pyplot as plt
 
     if not ifu_products:
@@ -412,7 +413,14 @@ def plot_virus_ifu_grid(
         figsize=(16, 16),
         squeeze=False,
     )
-    fig.subplots_adjust(left=0.03, right=0.97, bottom=0.03, top=0.95, wspace=0.02, hspace=0.02)
+    fig.subplots_adjust(
+        left=0.03,
+        right=0.97,
+        bottom=0.03,
+        top=0.95,
+        wspace=0.02,
+        hspace=0.02,
+    )
     artist = None
     for row_index, y_coordinate in enumerate(y_coordinates):
         for column_index, x_coordinate in enumerate(x_coordinates):
@@ -423,7 +431,17 @@ def plot_virus_ifu_grid(
             if slot is None:
                 ax.set_axis_off()
                 continue
-            ax.set_title(slot, fontsize="small", pad=2)
+            ax.set_title(
+                slot,
+                fontsize="small",
+                pad=2,
+                color="white",
+                path_effects=[
+                    pe.Stroke(linewidth=2.5, foreground="black"),
+                    pe.Normal(),
+                ],
+                bbox={"facecolor": "black", "edgecolor": "none", "pad": 1.5},
+            )
             product = products.get(slot)
             if product is None:
                 ax.text(
