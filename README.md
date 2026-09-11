@@ -11,7 +11,7 @@ full VIRUS or LRS2 reduction pipelines.
 
 - Getting started: [Installation](docs/installation.md) · [Quick-look workflows](docs/quicklook.md)
 - Data and instrument information: [Data layout](docs/data_layout.md) · [VIRUS](docs/virus.md) · [LRS2](docs/lrs2.md)
-- Interactive exploration: [Presentation playground](notebooks/hetquicklook_presentation_playground.ipynb)
+- Interactive exploration: [Observer quickstart notebook](notebooks/hetquicklook_presentation_playground.ipynb)
 
 ## Install (conda or pip)
 
@@ -167,7 +167,7 @@ grades.
 
 ## Notebook and presentation work
 
-The [presentation playground](notebooks/hetquicklook_presentation_playground.ipynb)
+The [observer quickstart notebook](notebooks/hetquicklook_presentation_playground.ipynb)
 walks through the current archive-to-result path on real VIRUS or LRS2 data:
 discovery, exposure metadata, one-amplifier inspection, topology and trace
 provenance, quick-look results, and LRS2 channel composition. Its presentation
