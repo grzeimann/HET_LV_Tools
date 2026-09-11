@@ -98,6 +98,16 @@ def test_site_normalizes_roots_and_night_flattens_exposures(
     assert night[1].metadata.object_name == "target-b"
 
 
+def test_site_default_trace_root_is_independent_of_working_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    site = QuicklookSite(raw_roots={"lrs2": tmp_path})
+
+    assert site.trace_root == Path(highlevel.__file__).resolve().parents[2]
+
+
 def test_night_html_is_compact_and_escapes_metadata(tmp_path: Path) -> None:
     observation = _observation(
         tmp_path,

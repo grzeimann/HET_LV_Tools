@@ -13,13 +13,12 @@ ql = QuicklookSite(
         "lrs2": "~/data/LRS2",
         "virus": "~/data/VIRUS",
     },
-    trace_root=".",
 )
 
 night = ql.night("20260512", instrument="lrs2")
 night
 
-exposure = night[19]
+exposure = night[25]  # choose another row from the displayed table as needed
 product = exposure.quicklook()
 product.plot()
 ```
@@ -52,6 +51,11 @@ focal-plane composition is outside this workflow layer.
 The high-level objects are orchestration and presentation wrappers. The
 lower-level numerical workflows remain useful when an expert needs direct
 control over a prepared detector array and `FiberTopology`.
+
+`QuicklookSite` resolves the repository's dated `Fiber_Locations` tree from
+the installed package location, so the notebook working directory does not
+affect normal trace lookup. An explicit `trace_root` may still be supplied for
+an alternate external trace deployment.
 
 # Low-level quick-look workflows
 

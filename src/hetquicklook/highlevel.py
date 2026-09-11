@@ -35,6 +35,16 @@ _TABLE_COLUMNS = (
 )
 
 
+def _package_trace_root() -> Path:
+    """Return the package/repository root containing ``Fiber_Locations``."""
+
+    # In the supported source and editable installations this module lives at
+    # ``<repository>/src/hetquicklook/highlevel.py``.  Resolve from the
+    # package location so notebook and process working directories do not
+    # affect dated trace lookup.
+    return Path(__file__).resolve().parents[2]
+
+
 def _display_value(value: Any) -> str:
     """Convert metadata to a compact, safe table value."""
 
@@ -103,10 +113,15 @@ def _exposure_row(row: int, observation: Observation, exposure: Exposure) -> dic
 
 @dataclass(frozen=True)
 class QuicklookSite:
-    """Reusable filesystem configuration for an interactive session."""
+    """Reusable filesystem configuration for an interactive session.
+
+    The dated ``Fiber_Locations`` tree is resolved from the package location
+    by default.  ``trace_root`` remains available as an explicit override for
+    deployments that keep an alternate trace tree outside the repository.
+    """
 
     raw_roots: Mapping[Instrument | str, str | Path]
-    trace_root: str | Path
+    trace_root: str | Path | None = None
     resource_root: str | Path | None = None
     standard_catalog: StandardStarCatalog | None = None
     _configs: Mapping[str, QuicklookConfig] = field(init=False, repr=False)
@@ -121,7 +136,11 @@ class QuicklookSite:
         if not normalized:
             raise ValueError("raw_roots must contain at least one instrument root")
         object.__setattr__(self, "raw_roots", normalized)
-        trace_root = Path(self.trace_root).expanduser().resolve()
+        trace_root = (
+            _package_trace_root()
+            if self.trace_root is None
+            else Path(self.trace_root).expanduser().resolve()
+        )
         object.__setattr__(self, "trace_root", trace_root)
         normalized_resource = (
             None

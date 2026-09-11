@@ -66,11 +66,10 @@ from hetquicklook import QuicklookSite
 
 ql = QuicklookSite(
     raw_roots={"lrs2": "~/data/LRS2", "virus": "~/data/VIRUS"},
-    trace_root=".",
 )
 night = ql.night("20260512", instrument="lrs2")
 night
-product = night[19].quicklook()
+product = night[25].quicklook()  # choose another row from the displayed table as needed
 product.plot()
 ```
 
