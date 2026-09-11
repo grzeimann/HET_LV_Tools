@@ -632,6 +632,7 @@ class _QuickTraceProvider:
         at: date | datetime | str | None,
         column_width: int,
         extraction_width: float,
+        timings: dict[str, float] | None = None,
     ) -> tuple[AlgorithmResult, TopologyReference, "ArchiveMember"]:
         """Return a validated quick trace and its calibration provenance."""
 
@@ -647,13 +648,18 @@ class _QuickTraceProvider:
                 f"Quick-look failed for exposure {target_exposure.exposure_id}, "
                 f"amplifier {token}, stage: target identity, reason: {error}"
             ) from error
-        candidate, _ = self._select_candidate(
-            target_exposure,
-            target_frame,
-            target_identity,
-            at=at,
-        )
-        selected_frame = self._require_flat_component(candidate, target_identity)
+        with _timed_stage(
+            timings if timings is not None else {},
+            "flat_candidate_selection",
+            timings is not None,
+        ):
+            candidate, _ = self._select_candidate(
+                target_exposure,
+                target_frame,
+                target_identity,
+                at=at,
+            )
+            selected_frame = self._require_flat_component(candidate, target_identity)
         cache_key = (
             str(selected_frame.archive_path),
             selected_frame.outer_tar_member,
@@ -669,9 +675,26 @@ class _QuickTraceProvider:
             return cached
 
         try:
-            loaded = candidate.load_frame(selected_frame, loader=loader)
-            detector = reduce_amplifier_array(loaded.data, dict(loaded.header))
-            prepared = detector.get_array("oriented_detector_image")
+            with _timed_stage(
+                timings if timings is not None else {},
+                "flat_archive_load",
+                timings is not None,
+            ):
+                loaded = candidate.load_frame(selected_frame, loader=loader)
+        except Exception as error:
+            token = f"{target_identity.ifu_slot}{target_identity.amplifier}"
+            raise QuicklookError(
+                f"Quick-look failed for exposure {target_exposure.exposure_id}, "
+                f"amplifier {token}, stage: flat archive load, reason: {error}"
+            ) from error
+        try:
+            with _timed_stage(
+                timings if timings is not None else {},
+                "flat_detector_preparation",
+                timings is not None,
+            ):
+                detector = reduce_amplifier_array(loaded.data, dict(loaded.header))
+                prepared = detector.get_array("oriented_detector_image")
         except Exception as error:
             token = f"{target_identity.ifu_slot}{target_identity.amplifier}"
             raise QuicklookError(
@@ -680,12 +703,17 @@ class _QuickTraceProvider:
             ) from error
 
         try:
-            flat_start, flat_stop = central_column_bounds(
-                prepared.shape[1], column_width
-            )
-            trace_reference, trace_provenance = VirusTopologyLoader(
-                trace_root=self._trace_root
-            ).resolve_trace_reference(target_identity, at=at)
+            with _timed_stage(
+                timings if timings is not None else {},
+                "trace_reference_resolution",
+                timings is not None,
+            ):
+                flat_start, flat_stop = central_column_bounds(
+                    prepared.shape[1], column_width
+                )
+                trace_reference, trace_provenance = VirusTopologyLoader(
+                    trace_root=self._trace_root
+                ).resolve_trace_reference(target_identity, at=at)
         except Exception as error:
             token = f"{target_identity.ifu_slot}{target_identity.amplifier}"
             raise QuicklookError(
@@ -694,32 +722,50 @@ class _QuickTraceProvider:
             ) from error
 
         try:
-            trace_result = fit_fiber_traces(
-                prepared[:, flat_start:flat_stop],
-                trace_reference,
-                specid=target_identity.specid,
-                ifuid=target_identity.ifuid,
-                amplifier=target_identity.amplifier,
-                n_chunks=5,
-                degree=1,
-                detector_column_start=flat_start,
-            )
-            expected_fibers = trace_reference.shape[0] - (
-                1 if _trace_hardware_exception(target_identity) else 0
-            )
-            _validate_trace_geometry(
-                trace_result,
-                detector_rows=prepared.shape[0],
-                detector_columns=flat_stop - flat_start,
-                expected_fibers=expected_fibers,
-                aperture_width=extraction_width,
-            )
+            with _timed_stage(
+                timings if timings is not None else {},
+                "fit_fiber_traces",
+                timings is not None,
+            ):
+                trace_result = fit_fiber_traces(
+                    prepared[:, flat_start:flat_stop],
+                    trace_reference,
+                    specid=target_identity.specid,
+                    ifuid=target_identity.ifuid,
+                    amplifier=target_identity.amplifier,
+                    n_chunks=5,
+                    degree=1,
+                    fit_method="fast",
+                    detector_column_start=flat_start,
+                )
         except Exception as error:
             token = f"{target_identity.ifu_slot}{target_identity.amplifier}"
             raise QuicklookError(
                 f"Quick-look failed for exposure {target_exposure.exposure_id}, "
-                f"amplifier {token}, stage: quick-trace fitting or validation, "
-                f"reason: {error}"
+                f"amplifier {token}, stage: fit_fiber_traces, reason: {error}"
+            ) from error
+
+        try:
+            with _timed_stage(
+                timings if timings is not None else {},
+                "trace_validation",
+                timings is not None,
+            ):
+                expected_fibers = trace_reference.shape[0] - (
+                    1 if _trace_hardware_exception(target_identity) else 0
+                )
+                _validate_trace_geometry(
+                    trace_result,
+                    detector_rows=prepared.shape[0],
+                    detector_columns=flat_stop - flat_start,
+                    expected_fibers=expected_fibers,
+                    aperture_width=extraction_width,
+                )
+        except Exception as error:
+            token = f"{target_identity.ifu_slot}{target_identity.amplifier}"
+            raise QuicklookError(
+                f"Quick-look failed for exposure {target_exposure.exposure_id}, "
+                f"amplifier {token}, stage: trace validation, reason: {error}"
             ) from error
 
         resolved = (trace_result, trace_provenance, selected_frame)
@@ -1251,6 +1297,7 @@ def _run_archive_amplifier_quicklook(
     """Run the shared archive-backed amplifier path once."""
 
     timings: dict[str, float] = {}
+    stage_prefix = "target" if quicklook_kind in {"standard", "target"} else "flat"
     total_started = perf_counter() if timing else 0.0
     try:
         identity = exposure.identity_for(frame)
@@ -1266,9 +1313,9 @@ def _run_archive_amplifier_quicklook(
         ) from error
     token = f"{identity.ifu_slot}{identity.amplifier}"
     try:
-        with _timed_stage(timings, "load", timing):
+        with _timed_stage(timings, f"{stage_prefix}_archive_load", timing):
             loaded = exposure.load_frame(frame, loader=loader)
-        with _timed_stage(timings, "detector_preparation", timing):
+        with _timed_stage(timings, f"{stage_prefix}_detector_preparation", timing):
             detector = reduce_amplifier_array(loaded.data, dict(loaded.header))
     except Exception as error:
         raise QuicklookError(
@@ -1286,12 +1333,13 @@ def _run_archive_amplifier_quicklook(
     trace_result: AlgorithmResult | None = None
     trace_provenance: TopologyReference | None = None
     trace_source: "ArchiveMember | None" = None
-    with _timed_stage(timings, "trace_resolution", timing):
-        try:
-            if quicklook_kind == "flat":
+    try:
+        if quicklook_kind == "flat":
+            with _timed_stage(timings, "trace_reference_resolution", timing):
                 trace_reference, trace_provenance = VirusTopologyLoader(
                     trace_root=trace_root
                 ).resolve_trace_reference(identity, at=at)
+            with _timed_stage(timings, "fit_fiber_traces", timing):
                 trace_result = fit_fiber_traces(
                     prepared_detector,
                     trace_reference,
@@ -1300,44 +1348,55 @@ def _run_archive_amplifier_quicklook(
                     amplifier=identity.amplifier,
                     n_chunks=5,
                     degree=1,
+                    fit_method="fast",
                     detector_column_start=detector_column_start,
                 )
                 trace_source = frame
-            elif quicklook_kind in {"standard", "target"}:
-                if trace_provider is None:
-                    raise QuicklookError(
-                        "a flat-derived trace provider is required for target extraction"
-                    )
-                trace_result, trace_provenance, trace_source = trace_provider.resolve(
-                    exposure,
-                    frame,
-                    loader=loader,
-                    at=at,
-                    column_width=collapse_columns,
-                    extraction_width=detector_extraction_width,
+            with _timed_stage(timings, "trace_validation", timing):
+                trace_reference_array = trace_result.get_array("trace_reference")
+                _validate_trace_geometry(
+                    trace_result,
+                    detector_rows=prepared_detector.shape[0],
+                    detector_columns=prepared_detector.shape[1],
+                    expected_fibers=trace_reference_array.shape[0],
+                    aperture_width=detector_extraction_width,
                 )
-            else:
-                raise ValueError(f"Unsupported quicklook_kind: {quicklook_kind!r}")
-
-            trace_map = trace_result.get_array("fiber_trace_map")
-            trace_reference = trace_result.get_array("trace_reference")
-            _validate_trace_geometry(
-                trace_result,
-                detector_rows=prepared_detector.shape[0],
-                detector_columns=prepared_detector.shape[1],
-                expected_fibers=trace_reference.shape[0],
-                aperture_width=detector_extraction_width,
+        elif quicklook_kind in {"standard", "target"}:
+            if trace_provider is None:
+                raise QuicklookError(
+                    "a flat-derived trace provider is required for target extraction"
+                )
+            provider_timings = {} if timing else None
+            trace_result, trace_provenance, trace_source = trace_provider.resolve(
+                exposure,
+                frame,
+                loader=loader,
+                at=at,
+                column_width=collapse_columns,
+                extraction_width=detector_extraction_width,
+                timings=provider_timings,
             )
-        except Exception as error:
-            if isinstance(error, QuicklookError):
-                reason = str(error)
-            else:
-                reason = str(error)
-            raise QuicklookError(
-                f"Quick-look failed for exposure {exposure.exposure_id}, "
-                f"amplifier {token}, stage: quick-trace fitting or validation, "
-                f"reason: {reason}"
-            ) from error
+            if provider_timings is not None:
+                timings.update(provider_timings)
+        else:
+            raise ValueError(f"Unsupported quicklook_kind: {quicklook_kind!r}")
+
+        trace_map = trace_result.get_array("fiber_trace_map")
+        trace_reference = trace_result.get_array("trace_reference")
+        _validate_trace_geometry(
+            trace_result,
+            detector_rows=prepared_detector.shape[0],
+            detector_columns=prepared_detector.shape[1],
+            expected_fibers=trace_reference.shape[0],
+            aperture_width=detector_extraction_width,
+        )
+    except Exception as error:
+        reason = str(error)
+        raise QuicklookError(
+            f"Quick-look failed for exposure {exposure.exposure_id}, "
+            f"amplifier {token}, stage: quick-trace fitting or validation, "
+            f"reason: {reason}"
+        ) from error
 
     try:
         with _timed_stage(timings, "topology", timing):
@@ -1360,7 +1419,7 @@ def _run_archive_amplifier_quicklook(
         ) from error
     instrument = Instrument.from_value(topology_result.physical_identity.instrument)
     try:
-        with _timed_stage(timings, "extraction_and_spatial", timing):
+        with _timed_stage(timings, "local_extraction_collapse", timing):
             if quicklook_kind == "flat":
                 product = run_ldls_flat_quicklook(
                     prepared_detector,
@@ -1834,7 +1893,7 @@ def run_virus_ifu_quicklooks(
             )
 
         composition_timings: dict[str, float] = {}
-        with _timed_stage(composition_timings, "composition", timing):
+        with _timed_stage(composition_timings, "ifu_composition", timing):
             product = _compose_virus_ifu_quicklook(
                 evidence,
                 ifu_slot=slot,
@@ -1852,7 +1911,7 @@ def run_virus_ifu_quicklooks(
             for stage, seconds in item.diagnostics.stage_seconds.items()
         }
         stage_seconds.update(
-            {f"ifu.{stage}": seconds for stage, seconds in composition_timings.items()}
+            composition_timings
         )
         retained_bytes = (
             sum(item.diagnostics.retained_array_bytes for item in evidence.values())

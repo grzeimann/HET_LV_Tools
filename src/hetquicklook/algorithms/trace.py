@@ -69,6 +69,93 @@ def robust_polyfit_predict(
     return np.polynomial.polynomial.polyval(prediction_scaled, coefficients)
 
 
+def _ordinary_polyfit_predict(
+    x_observed: np.ndarray,
+    y_observed: np.ndarray,
+    x_prediction: np.ndarray,
+    *,
+    degree: int,
+) -> np.ndarray:
+    """Fit one ordinary polynomial, preserving the trace validity rules."""
+
+    x_obs = np.asarray(x_observed, dtype=float).ravel()
+    y_obs = np.asarray(y_observed, dtype=float).ravel()
+    x_pred = np.asarray(x_prediction, dtype=float).ravel()
+    valid = np.isfinite(x_obs) & np.isfinite(y_obs) & (y_obs > 0.0)
+    if np.count_nonzero(valid) < 2:
+        return np.full(x_pred.shape, np.nan, dtype=float)
+    x_obs = x_obs[valid]
+    y_obs = y_obs[valid]
+    fit_degree = max(1, min(int(degree), 4, x_obs.size - 1))
+    minimum = float(np.min(x_obs))
+    maximum = float(np.max(x_obs))
+    span = maximum - minimum
+    if not np.isfinite(span) or span <= 0.0:
+        return np.full(x_pred.shape, float(np.median(y_obs)), dtype=float)
+    scaled = 2.0 * (x_obs - minimum) / span - 1.0
+    prediction_scaled = 2.0 * (x_pred - minimum) / span - 1.0
+    design = np.polynomial.polynomial.polyvander(scaled, fit_degree)
+    try:
+        coefficients, _, _, _ = np.linalg.lstsq(design, y_obs, rcond=None)
+    except (ValueError, np.linalg.LinAlgError):
+        return np.full(x_pred.shape, np.nan, dtype=float)
+    return np.polynomial.polynomial.polyval(prediction_scaled, coefficients)
+
+
+def _fast_polyfit_predict(
+    x_observed: np.ndarray,
+    y_observed: np.ndarray,
+    x_prediction: np.ndarray,
+    *,
+    degree: int,
+) -> np.ndarray:
+    """Fit common complete trace samples in one batched least-squares solve."""
+
+    x_obs = np.asarray(x_observed, dtype=float).ravel()
+    samples = np.asarray(y_observed, dtype=float)
+    if samples.ndim != 2 or samples.shape[1] != x_obs.size:
+        raise ValueError("batched trace samples must be shaped (fiber, sample)")
+    x_pred = np.asarray(x_prediction, dtype=float).ravel()
+    dense = np.zeros((samples.shape[0], x_pred.size), dtype=float)
+    valid = np.isfinite(samples) & (samples > 0.0)
+    valid &= np.isfinite(x_obs)[None, :]
+    counts = np.count_nonzero(valid, axis=1)
+    fit_degree = max(1, min(int(degree), 4, x_obs.size - 1))
+    complete = np.all(valid, axis=1) & (counts >= fit_degree + 1)
+
+    if np.any(complete):
+        minimum = float(np.min(x_obs))
+        maximum = float(np.max(x_obs))
+        span = maximum - minimum
+        if np.isfinite(span) and span > 0.0:
+            scaled = 2.0 * (x_obs - minimum) / span - 1.0
+            prediction_scaled = 2.0 * (x_pred - minimum) / span - 1.0
+            design = np.polynomial.polynomial.polyvander(scaled, fit_degree)
+            try:
+                coefficients, _, _, _ = np.linalg.lstsq(
+                    design, samples[complete].T, rcond=None
+                )
+            except (ValueError, np.linalg.LinAlgError):
+                complete = np.zeros_like(complete)
+            else:
+                prediction = np.polynomial.polynomial.polyvander(
+                    prediction_scaled, fit_degree
+                ) @ coefficients
+                dense[complete] = prediction.T
+        else:
+            dense[complete] = np.median(samples[complete], axis=1)[:, None]
+
+    fallback = np.flatnonzero((counts > 0) & ~complete)
+    for fiber in fallback:
+        dense[fiber] = _ordinary_polyfit_predict(
+            x_obs[valid[fiber]],
+            samples[fiber, valid[fiber]],
+            x_pred,
+            degree=degree,
+        )
+    return dense
+
+
 def _percentile_filter_1d(values: np.ndarray, window: int, percentile: float) -> np.ndarray:
     """Apply a nearest-edge one-dimensional percentile filter."""
 
@@ -208,6 +295,7 @@ def fit_fiber_traces(
     master_flat_array: np.ndarray | None = None,
     n_chunks: int = DEFAULT_TRACE_CHUNKS,
     degree: int = DEFAULT_TRACE_DEGREE,
+    fit_method: str = "robust",
     detector_column_start: int = 0,
 ) -> AlgorithmResult:
     """Fit a dense detector trace map from a loaded continuum flat.
@@ -222,6 +310,8 @@ def fit_fiber_traces(
             ``504/018/RU`` hardware exception.
         zipcode: Optional object with ``specid``, ``ifuid``, and ``amp``
             attributes, retained as a convenient identity adapter.
+        fit_method: ``"robust"`` for the existing Huber fit or ``"fast"``
+            for ordinary polynomial least squares used by compact quick looks.
         detector_column_start: Original prepared-detector column corresponding
             to local column zero. This records provenance only; all returned
             trace coordinates remain local to ``continuum_flat``.
@@ -245,6 +335,9 @@ def fit_fiber_traces(
     reference = np.atleast_2d(np.asarray(trace_reference, dtype=float))
     if image.ndim != 2 or reference.ndim != 2 or reference.shape[1] < 2:
         raise ValueError("continuum_flat must be 2D and trace_reference must be Nx2")
+    normalized_fit_method = str(fit_method).strip().casefold()
+    if normalized_fit_method not in {"fast", "robust"}:
+        raise ValueError("fit_method must be 'fast' or 'robust'")
     try:
         column_start = int(detector_column_start)
     except (TypeError, ValueError) as error:
@@ -266,14 +359,19 @@ def fit_fiber_traces(
             np.nanmedian(image[:, chunk], axis=1), reference.shape[0], reference
         )
 
-    dense = np.zeros((reference.shape[0], image.shape[1]), dtype=float)
     x = np.arange(image.shape[1], dtype=float)
-    for fiber in range(reference.shape[0]):
-        valid = np.isfinite(sampled[fiber]) & (sampled[fiber] > 0.0)
-        if np.any(valid):
-            dense[fiber] = robust_polyfit_predict(
-                x_chunks[valid], sampled[fiber, valid], x, degree=degree
-            )
+    if normalized_fit_method == "fast":
+        dense = _fast_polyfit_predict(
+            x_chunks, sampled, x, degree=degree
+        )
+    else:
+        dense = np.zeros((reference.shape[0], image.shape[1]), dtype=float)
+        for fiber in range(reference.shape[0]):
+            valid = np.isfinite(sampled[fiber]) & (sampled[fiber] > 0.0)
+            if np.any(valid):
+                dense[fiber] = robust_polyfit_predict(
+                    x_chunks[valid], sampled[fiber, valid], x, degree=degree
+                )
 
     normalized_specid = None if specid is None else str(specid).strip().zfill(3)
     normalized_ifuid = None if ifuid is None else str(ifuid).strip().zfill(3)
@@ -319,12 +417,18 @@ def fit_fiber_traces(
             "trace_len": int(image.shape[1]),
             "trace_n_chunks": chunks,
             "trace_degree_requested": int(degree),
+            "trace_fit_method": normalized_fit_method,
             "trace_column_start": column_start,
             "trace_column_stop": column_start + int(image.shape[1]),
         },
         metadata={
             "trace_map_shape": list(dense.shape),
-            "trace_model": "per_fiber_huber_polynomial",
+            "trace_model": (
+                "per_fiber_huber_polynomial"
+                if normalized_fit_method == "robust"
+                else "per_fiber_ordinary_least_squares_polynomial"
+            ),
+            "trace_fit_method": normalized_fit_method,
             "trace_n_chunks": chunks,
             "trace_degree_requested": int(degree),
             "trace_column_bounds": [

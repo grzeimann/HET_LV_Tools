@@ -1,5 +1,6 @@
 import numpy as np
 import pytest
+import hetquicklook.algorithms.trace as trace_algorithm
 
 from hetquicklook import (
     STANDARD_STAR_ALIASES,
@@ -131,7 +132,75 @@ def test_quick_trace_is_local_and_records_requested_fit_parameters() -> None:
     assert result.scalars["trace_column_start"] == local_start
     assert result.scalars["trace_column_stop"] == local_stop
     assert result.metadata["trace_model"] == "per_fiber_huber_polynomial"
+    assert result.metadata["trace_fit_method"] == "robust"
     assert result.metadata["trace_column_bounds"] == [local_start, local_stop]
+
+
+def test_fast_trace_fit_batches_complete_fibers_and_records_method(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reference = np.column_stack((np.arange(3, dtype=float), np.zeros(3)))
+    image = np.ones((8, 10), dtype=float)
+    x_chunks = np.array([0.5, 2.5, 4.5, 6.5, 8.5])
+    samples = 4.0 + 0.25 * x_chunks[None, :] + np.arange(3)[:, None]
+
+    def fake_trace(_profile, n_fibers, _reference):
+        assert n_fibers == 3
+        return samples[:, fake_trace.calls].copy()
+
+    fake_trace.calls = 0
+
+    def traced_fake(profile, n_fibers, reference_value):
+        result = fake_trace(profile, n_fibers, reference_value)
+        fake_trace.calls += 1
+        return result
+
+    monkeypatch.setattr(trace_algorithm, "_trace_from_flat_chunk", traced_fake)
+    result = trace_algorithm.fit_fiber_traces(
+        image,
+        reference,
+        n_chunks=5,
+        degree=1,
+        fit_method="fast",
+    )
+
+    expected = 4.0 + 0.25 * np.arange(10, dtype=float)[None, :] + np.arange(3)[:, None]
+    np.testing.assert_allclose(result.get_array("fiber_trace_map"), expected)
+    assert result.scalars["trace_fit_method"] == "fast"
+    assert result.metadata["trace_fit_method"] == "fast"
+    assert result.metadata["trace_model"] == "per_fiber_ordinary_least_squares_polynomial"
+
+
+def test_fast_trace_fit_falls_back_for_missing_samples(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reference = np.column_stack((np.arange(2, dtype=float), np.zeros(2)))
+    image = np.ones((6, 10), dtype=float)
+    x_chunks = np.array([0.5, 2.5, 4.5, 6.5, 8.5])
+    samples = 3.0 + 0.5 * x_chunks[None, :] + np.arange(2)[:, None]
+    samples[1, 2] = 0.0
+    calls = 0
+
+    def fake_trace(_profile, _n_fibers, _reference):
+        nonlocal calls
+        result = samples[:, calls].copy()
+        calls += 1
+        return result
+
+    monkeypatch.setattr(trace_algorithm, "_trace_from_flat_chunk", fake_trace)
+    result = trace_algorithm.fit_fiber_traces(
+        image,
+        reference,
+        n_chunks=5,
+        degree=1,
+        fit_method="fast",
+    )
+
+    assert result.get_array("per_fiber_valid_sample_count")[1] == 4
+    np.testing.assert_allclose(
+        result.get_array("fiber_trace_map")[1],
+        4.0 + 0.5 * np.arange(10, dtype=float),
+    )
 
 
 def test_trace_preserves_demonstrated_virus_hardware_exception() -> None:

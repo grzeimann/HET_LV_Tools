@@ -519,6 +519,7 @@ def test_lrs2_batch_workflow_retains_amplifier_evidence_and_channels(
     assert all(shape == (10, 200) for shape, _ in trace_calls)
     assert all(call["n_chunks"] == 5 for _, call in trace_calls)
     assert all(call["degree"] == 1 for _, call in trace_calls)
+    assert all(call["fit_method"] == "fast" for _, call in trace_calls)
     assert all(call["detector_column_start"] == 10 for _, call in trace_calls)
     assert all(not kwargs["retain_extraction"] for kwargs in flat_kwargs)
     assert all(not kwargs["build_spatial"] for kwargs in flat_kwargs)
@@ -752,6 +753,6 @@ def test_virus_workflow_composes_one_ifu_image_and_reports_diagnostics(
     assert ifu.product.image.shape[1] > 10
     assert ifu.diagnostics.worker_count == 2
     assert ifu.diagnostics.retained_array_bytes > 0
-    assert "ifu.composition" in ifu.diagnostics.stage_seconds
+    assert "ifu_composition" in ifu.diagnostics.stage_seconds
     assert set(result.diagnostics) == {"074", "075"}
     assert len(thread_names) == 2

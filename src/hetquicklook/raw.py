@@ -2,8 +2,8 @@
 
 The implementation intentionally keeps discovery and physical loading
 separate. It follows the VIRUSFlow contract that the primary HDU contains the
-detector array and the relevant raw header, while leaving caching and indexed
-tar access to the larger pipeline.
+detector array and the relevant raw header, while reusing small per-loader tar
+handles for repeated member reads.
 """
 
 from __future__ import annotations
@@ -12,6 +12,7 @@ from contextlib import contextmanager
 import io
 from pathlib import Path
 import tarfile
+from threading import RLock
 from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -64,6 +65,58 @@ class HeaderReadResult:
 class RawFrameLoader:
     """Load primary-HDU FITS data from direct or nested tar members."""
 
+    def __init__(self) -> None:
+        self._archives: dict[Path, tarfile.TarFile] = {}
+        self._nested_archives: dict[
+            tuple[Path, str], tuple[tarfile.TarFile, Any]
+        ] = {}
+        self._archive_lock = RLock()
+
+    def _get_archive(self, path: Path) -> tarfile.TarFile:
+        archive = self._archives.get(path)
+        if archive is None:
+            archive = tarfile.open(path, mode="r:*")
+            self._archives[path] = archive
+        return archive
+
+    def _get_nested_archive(self, path: Path, member_name: str) -> tarfile.TarFile:
+        key = (path, member_name)
+        cached = self._nested_archives.get(key)
+        if cached is not None:
+            return cached[0]
+        outer = self._get_archive(path)
+        member = outer.getmember(member_name)
+        nested_stream = outer.extractfile(member)
+        if nested_stream is None:
+            raise FileNotFoundError(f"Cannot extract {member_name} from {path}")
+        try:
+            inner = tarfile.open(fileobj=nested_stream, mode="r:*")
+        except Exception:
+            nested_stream.close()
+            raise
+        self._nested_archives[key] = (inner, nested_stream)
+        return inner
+
+    def close(self) -> None:
+        """Close cached nested and outer archive handles."""
+
+        with self._archive_lock:
+            for inner, nested_stream in self._nested_archives.values():
+                try:
+                    inner.close()
+                finally:
+                    nested_stream.close()
+            for archive in self._archives.values():
+                archive.close()
+            self._nested_archives.clear()
+            self._archives.clear()
+
+    def __enter__(self) -> "RawFrameLoader":
+        return self
+
+    def __exit__(self, exc_type: object, exc_value: object, traceback: object) -> None:
+        self.close()
+
     @contextmanager
     def _open_payload(
         self,
@@ -76,38 +129,19 @@ class RawFrameLoader:
                 yield stream
             return
 
-        with tarfile.open(path, mode="r:*") as outer:
+        with self._archive_lock:
             if outer_tar_member is None:
-                member = outer.getmember(tar_member)
-                stream = outer.extractfile(member)
-                if stream is None:
-                    raise FileNotFoundError(f"Cannot extract {tar_member} from {path}")
-                try:
-                    yield stream
-                finally:
-                    stream.close()
-                return
-
-            nested = outer.getmember(outer_tar_member)
-            nested_stream = outer.extractfile(nested)
-            if nested_stream is None:
-                raise FileNotFoundError(
-                    f"Cannot extract {outer_tar_member} from {path}"
-                )
+                archive = self._get_archive(path)
+            else:
+                archive = self._get_nested_archive(path, outer_tar_member)
+            member = archive.getmember(tar_member)
+            stream = archive.extractfile(member)
+            if stream is None:
+                raise FileNotFoundError(f"Cannot extract {tar_member} from {path}")
             try:
-                with tarfile.open(fileobj=nested_stream, mode="r:*") as inner:
-                    member = inner.getmember(tar_member)
-                    stream = inner.extractfile(member)
-                    if stream is None:
-                        raise FileNotFoundError(
-                            f"Cannot extract {tar_member} from {outer_tar_member}"
-                        )
-                    try:
-                        yield stream
-                    finally:
-                        stream.close()
+                yield stream
             finally:
-                nested_stream.close()
+                stream.close()
 
     @staticmethod
     def _source_details(

@@ -1,7 +1,9 @@
 import io
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date
 from pathlib import Path
 import tarfile
+from unittest.mock import patch
 
 import numpy as np
 from astropy.io import fits
@@ -93,6 +95,55 @@ def test_loader_reads_primary_hdu_and_retains_provenance(tmp_path: Path) -> None
     assert loaded.identity == member.identity
 
 
+def test_loader_reuses_direct_archive_and_is_safe_for_threaded_reads(
+    tmp_path: Path,
+) -> None:
+    archive_path = tmp_path / "observation.tar"
+    names = (
+        "20260511T035810.4_074LL_cmp.fits",
+        "20260511T035810.4_074LU_cmp.fits",
+    )
+    with tarfile.open(archive_path, mode="w") as archive:
+        for value, name in enumerate(names, start=1):
+            _add_member(archive, name, _fits_bytes(np.array([[value]])))
+    members = inventory_members(_observation(archive_path))
+
+    loader = RawFrameLoader()
+    with patch("hetquicklook.raw.tarfile.open", wraps=tarfile.open) as open_tar:
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            loaded = tuple(executor.map(loader.load, members))
+        assert open_tar.call_count == 1
+    np.testing.assert_array_equal(loaded[0].data, np.array([[1]]))
+    np.testing.assert_array_equal(loaded[1].data, np.array([[2]]))
+    loader.close()
+    assert loader._archives == {}
+
+
+def test_loader_reuses_nested_outer_and_inner_archives(tmp_path: Path) -> None:
+    inner_bytes = io.BytesIO()
+    names = (
+        "virus0000001/exp01/virus/20260511T035810.4_074LL_cmp.fits",
+        "virus0000001/exp01/virus/20260511T035810.4_074LU_cmp.fits",
+    )
+    with tarfile.open(fileobj=inner_bytes, mode="w") as inner:
+        for value, name in enumerate(names, start=1):
+            _add_member(inner, name, _fits_bytes(np.array([[value]])))
+    outer_path = tmp_path / "20260511.tar"
+    outer_member = "virus/virus0000001.tar"
+    with tarfile.open(outer_path, mode="w") as outer:
+        _add_member(outer, outer_member, inner_bytes.getvalue())
+
+    members = inventory_members(_observation(outer_path, outer_tar_member=outer_member))
+    loader = RawFrameLoader()
+    with patch("hetquicklook.raw.tarfile.open", wraps=tarfile.open) as open_tar:
+        loader.load(members[0])
+        loader.load(members[1])
+        assert open_tar.call_count == 2
+    loader.close()
+    assert loader._archives == {}
+    assert loader._nested_archives == {}
+
+
 def test_loader_supports_nested_date_tar_layout(tmp_path: Path) -> None:
     inner_bytes = io.BytesIO()
     with tarfile.open(fileobj=inner_bytes, mode="w") as inner:
@@ -114,4 +165,3 @@ def test_loader_supports_nested_date_tar_layout(tmp_path: Path) -> None:
     assert members[0].outer_tar_member == outer_member
     np.testing.assert_array_equal(loaded.data, np.array([[7]], dtype=np.uint16))
     assert loaded.provenance == (outer_path, outer_member, members[0].member_name)
-

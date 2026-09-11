@@ -407,12 +407,13 @@ class QuicklookExposure:
         configured_resource_root = (
             self.night.site.resource_root if resource_root is None else resource_root
         )
+        active_loader = loader if loader is not None else RawFrameLoader()
         common = dict(
             trace_root=trace_root,
             at=self.observation.discovered.date,
             frame_type=frame_type,
             quicklook_kind=resolved_kind,
-            loader=loader,
+            loader=active_loader,
             resource_root=configured_resource_root,
             requested_position=requested_position,
             detector_extraction_width=detector_extraction_width,
@@ -426,21 +427,25 @@ class QuicklookExposure:
             trace_provider=self.night._trace_provider,
             detailed_evidence=detailed_evidence,
         )
-        if self.instrument is Instrument.LRS2:
-            raw_result = workflows.run_lrs2_channel_quicklooks(
-                self.raw_exposure,
-                **common,
-            )
-        else:
-            common.update(
-                nworkers=nworkers,
-                timing=timing,
-                memory_check=memory_check,
-            )
-            raw_result = workflows.run_virus_ifu_quicklooks(
-                self.raw_exposure,
-                **common,
-            )
+        try:
+            if self.instrument is Instrument.LRS2:
+                raw_result = workflows.run_lrs2_channel_quicklooks(
+                    self.raw_exposure,
+                    **common,
+                )
+            else:
+                common.update(
+                    nworkers=nworkers,
+                    timing=timing,
+                    memory_check=memory_check,
+                )
+                raw_result = workflows.run_virus_ifu_quicklooks(
+                    self.raw_exposure,
+                    **common,
+                )
+        finally:
+            if loader is None:
+                active_loader.close()
         return QuicklookProduct.from_result(self, resolved_kind, raw_result)
 
     def __repr__(self) -> str:
