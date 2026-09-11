@@ -203,6 +203,31 @@ def test_fast_trace_fit_falls_back_for_missing_samples(
     )
 
 
+def test_trace_timing_reports_accumulated_compact_substages() -> None:
+    flat, reference = _synthetic_flat(20)
+    timings: dict[str, float] = {}
+    fit_fiber_traces(
+        flat,
+        reference,
+        n_chunks=5,
+        degree=1,
+        fit_method="fast",
+        timings=timings,
+    )
+
+    assert set(timings) == {
+        "chunk_profile_collapse",
+        "flat_profile_preprocessing",
+        "percentile_filter",
+        "background_polynomial",
+        "gaussian_smoothing",
+        "peak_detection_assignment",
+        "polynomial_trace_fit",
+        "trace_result_qa",
+    }
+    assert all(value >= 0.0 for value in timings.values())
+
+
 def test_trace_preserves_demonstrated_virus_hardware_exception() -> None:
     flat = np.zeros((20, 80), dtype=float)
     y = np.arange(20, dtype=float)[:, None]

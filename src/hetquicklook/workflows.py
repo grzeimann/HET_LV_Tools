@@ -737,6 +737,7 @@ class _QuickTraceProvider:
                     degree=1,
                     fit_method="fast",
                     detector_column_start=flat_start,
+                    timings=timings,
                 )
         except Exception as error:
             token = f"{target_identity.ifu_slot}{target_identity.amplifier}"
@@ -1350,6 +1351,7 @@ def _run_archive_amplifier_quicklook(
                     degree=1,
                     fit_method="fast",
                     detector_column_start=detector_column_start,
+                    timings=timings if timing else None,
                 )
                 trace_source = frame
             with _timed_stage(timings, "trace_validation", timing):

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from contextlib import contextmanager
+from time import perf_counter
 from typing import Any
 
 import numpy as np
@@ -13,6 +15,22 @@ from .results import AlgorithmResult
 TRACE_ALGORITHM_VERSION = "trace-1.2"
 DEFAULT_TRACE_CHUNKS = 40
 DEFAULT_TRACE_DEGREE = 4
+
+
+@contextmanager
+def _timed_trace_stage(
+    timings: dict[str, float] | None, name: str
+):
+    """Accumulate one optional trace-fitting stage measurement."""
+
+    if timings is None:
+        yield
+        return
+    started = perf_counter()
+    try:
+        yield
+    finally:
+        timings[name] = timings.get(name, 0.0) + perf_counter() - started
 
 
 def robust_polyfit_predict(
@@ -201,26 +219,33 @@ def preprocess_flat_for_detection(
     percentile: float = 5.0,
     background_degree: int = 2,
     gaussian_sigma: float = 1.5,
+    timings: dict[str, float] | None = None,
 ) -> np.ndarray:
     """Remove broad cross-dispersion structure and smooth a flat profile."""
 
     values = np.asarray(profile, dtype=float).ravel()
     if values.size == 0:
         return values.copy()
-    broad_background = _percentile_filter_1d(
-        values, percentile_window, percentile
-    )
-    x = np.arange(values.size, dtype=float)
-    finite = np.isfinite(broad_background)
-    degree = min(max(0, int(background_degree)), max(0, int(np.count_nonzero(finite) - 1)))
-    if np.count_nonzero(finite) >= degree + 1:
-        coefficients = np.polynomial.polynomial.polyfit(
-            x[finite], broad_background[finite], degree
+    with _timed_trace_stage(timings, "percentile_filter"):
+        broad_background = _percentile_filter_1d(
+            values, percentile_window, percentile
         )
-        background = np.polynomial.polynomial.polyval(x, coefficients)
-    else:
-        background = np.nan_to_num(broad_background, nan=0.0)
-    return _gaussian_smooth_1d(values - background, gaussian_sigma)
+    with _timed_trace_stage(timings, "background_polynomial"):
+        x = np.arange(values.size, dtype=float)
+        finite = np.isfinite(broad_background)
+        degree = min(
+            max(0, int(background_degree)),
+            max(0, int(np.count_nonzero(finite) - 1)),
+        )
+        if np.count_nonzero(finite) >= degree + 1:
+            coefficients = np.polynomial.polynomial.polyfit(
+                x[finite], broad_background[finite], degree
+            )
+            background = np.polynomial.polynomial.polyval(x, coefficients)
+        else:
+            background = np.nan_to_num(broad_background, nan=0.0)
+    with _timed_trace_stage(timings, "gaussian_smoothing"):
+        return _gaussian_smooth_1d(values - background, gaussian_sigma)
 
 
 def _subpixel_peak_positions(profile: np.ndarray, candidates: np.ndarray) -> np.ndarray:
@@ -241,34 +266,42 @@ def _subpixel_peak_positions(profile: np.ndarray, candidates: np.ndarray) -> np.
     return np.where(np.isfinite(result), result, candidates.astype(float))
 
 
-def _trace_from_flat_chunk(profile: np.ndarray, n_fibers: int, reference: np.ndarray) -> np.ndarray:
+def _trace_from_flat_chunk(
+    profile: np.ndarray,
+    n_fibers: int,
+    reference: np.ndarray,
+    *,
+    timings: dict[str, float] | None = None,
+) -> np.ndarray:
     """Detect one cross-dispersion chunk and fill configured dead fibers."""
 
-    processed = preprocess_flat_for_detection(profile)
-    finite = np.where(np.isfinite(processed), processed, -np.inf)
-    differences = np.diff(finite)
-    candidates = np.where(
-        (differences[:-1] > 0.0) & (differences[1:] < 0.0)
-    )[0] + 1
-    heights = finite[candidates]
-    active_count = int(np.count_nonzero(np.asarray(reference)[:, 1] == 0.0))
-    if candidates.size > active_count:
-        selected = np.argsort(heights)[::-1][:active_count]
-        candidates = np.sort(candidates[selected])
-    observed = _subpixel_peak_positions(profile, candidates)
-    trace = np.zeros(n_fibers, dtype=float)
-    good = np.flatnonzero(np.asarray(reference)[:, 1] == 0.0)
-    if observed.size == good.size and observed.size:
-        trace[good] = observed
-        for missing in np.flatnonzero(np.asarray(reference)[:, 1] != 0.0):
-            nearest = good[np.argmin(np.abs(missing - good))]
-            trace[missing] = (
-                trace[nearest]
-                + reference[missing, 0]
-                - reference[nearest, 0]
-            )
-    elif observed.size == n_fibers:
-        trace[:] = observed
+    with _timed_trace_stage(timings, "flat_profile_preprocessing"):
+        processed = preprocess_flat_for_detection(profile, timings=timings)
+    with _timed_trace_stage(timings, "peak_detection_assignment"):
+        finite = np.where(np.isfinite(processed), processed, -np.inf)
+        differences = np.diff(finite)
+        candidates = np.where(
+            (differences[:-1] > 0.0) & (differences[1:] < 0.0)
+        )[0] + 1
+        heights = finite[candidates]
+        active_count = int(np.count_nonzero(np.asarray(reference)[:, 1] == 0.0))
+        if candidates.size > active_count:
+            selected = np.argsort(heights)[::-1][:active_count]
+            candidates = np.sort(candidates[selected])
+        observed = _subpixel_peak_positions(profile, candidates)
+        trace = np.zeros(n_fibers, dtype=float)
+        good = np.flatnonzero(np.asarray(reference)[:, 1] == 0.0)
+        if observed.size == good.size and observed.size:
+            trace[good] = observed
+            for missing in np.flatnonzero(np.asarray(reference)[:, 1] != 0.0):
+                nearest = good[np.argmin(np.abs(missing - good))]
+                trace[missing] = (
+                    trace[nearest]
+                    + reference[missing, 0]
+                    - reference[nearest, 0]
+                )
+        elif observed.size == n_fibers:
+            trace[:] = observed
     return trace
 
 
@@ -297,6 +330,7 @@ def fit_fiber_traces(
     degree: int = DEFAULT_TRACE_DEGREE,
     fit_method: str = "robust",
     detector_column_start: int = 0,
+    timings: dict[str, float] | None = None,
 ) -> AlgorithmResult:
     """Fit a dense detector trace map from a loaded continuum flat.
 
@@ -315,6 +349,7 @@ def fit_fiber_traces(
         detector_column_start: Original prepared-detector column corresponding
             to local column zero. This records provenance only; all returned
             trace coordinates remain local to ``continuum_flat``.
+        timings: Optional diagnostic accumulator for trace-fitting substages.
 
     Returns:
         Named dense trace and trace QA arrays.  The first dimension follows
@@ -355,24 +390,33 @@ def fit_fiber_traces(
     x_chunks = np.array([np.mean(chunk) for chunk in x_chunks_array], dtype=float)
     sampled = np.zeros((reference.shape[0], len(x_chunks)), dtype=float)
     for index, chunk in enumerate(x_chunks_array):
-        sampled[:, index] = _trace_from_flat_chunk(
-            np.nanmedian(image[:, chunk], axis=1), reference.shape[0], reference
-        )
+        with _timed_trace_stage(timings, "chunk_profile_collapse"):
+            profile = np.nanmedian(image[:, chunk], axis=1)
+        if timings is None:
+            sampled[:, index] = _trace_from_flat_chunk(
+                profile, reference.shape[0], reference
+            )
+        else:
+            sampled[:, index] = _trace_from_flat_chunk(
+                profile, reference.shape[0], reference, timings=timings
+            )
 
     x = np.arange(image.shape[1], dtype=float)
-    if normalized_fit_method == "fast":
-        dense = _fast_polyfit_predict(
-            x_chunks, sampled, x, degree=degree
-        )
-    else:
-        dense = np.zeros((reference.shape[0], image.shape[1]), dtype=float)
-        for fiber in range(reference.shape[0]):
-            valid = np.isfinite(sampled[fiber]) & (sampled[fiber] > 0.0)
-            if np.any(valid):
-                dense[fiber] = robust_polyfit_predict(
-                    x_chunks[valid], sampled[fiber, valid], x, degree=degree
-                )
+    with _timed_trace_stage(timings, "polynomial_trace_fit"):
+        if normalized_fit_method == "fast":
+            dense = _fast_polyfit_predict(
+                x_chunks, sampled, x, degree=degree
+            )
+        else:
+            dense = np.zeros((reference.shape[0], image.shape[1]), dtype=float)
+            for fiber in range(reference.shape[0]):
+                valid = np.isfinite(sampled[fiber]) & (sampled[fiber] > 0.0)
+                if np.any(valid):
+                    dense[fiber] = robust_polyfit_predict(
+                        x_chunks[valid], sampled[fiber, valid], x, degree=degree
+                    )
 
+    qa_started = perf_counter() if timings is not None else 0.0
     normalized_specid = None if specid is None else str(specid).strip().zfill(3)
     normalized_ifuid = None if ifuid is None else str(ifuid).strip().zfill(3)
     normalized_amp = None if amplifier is None else str(amplifier).strip().upper()
@@ -399,7 +443,7 @@ def fit_fiber_traces(
         if valid_counts[fiber] >= 2:
             residual_rms[fiber] = _mad_std(residuals[fiber, valid_samples[fiber]])
     interpolated = (reference[:, 1] != 0.0).astype(np.uint8)
-    return AlgorithmResult(
+    result = AlgorithmResult(
         kind="trace",
         version=TRACE_ALGORITHM_VERSION,
         arrays={
@@ -440,6 +484,11 @@ def fit_fiber_traces(
             ),
         },
     )
+    if timings is not None:
+        timings["trace_result_qa"] = (
+            timings.get("trace_result_qa", 0.0) + perf_counter() - qa_started
+        )
+    return result
 
 
 # Clearer name for callers that do not need the historical pipeline spelling.
