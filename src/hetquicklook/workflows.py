@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
@@ -80,7 +79,6 @@ class QuicklookDiagnostics:
     stage_seconds: Mapping[str, float] = field(default_factory=dict)
     retained_array_bytes: int = 0
     peak_rss_bytes: int | None = None
-    worker_count: int = 1
 
 
 @contextmanager
@@ -452,18 +450,6 @@ def _required_amplifier_tokens(identity: PhysicalAmplifierIdentity) -> tuple[str
 
     slot = str(identity.ifu_slot).strip().zfill(3)
     return tuple(f"{slot}{amplifier}" for amplifier in ("LL", "LU", "RL", "RU"))
-
-
-def _worker_count(requested: int, available: int) -> int:
-    """Validate and cap a workflow worker count."""
-
-    try:
-        count = int(requested)
-    except (TypeError, ValueError) as error:
-        raise ValueError("nworkers must be a positive integer") from error
-    if count <= 0:
-        raise ValueError("nworkers must be a positive integer")
-    return min(count, max(1, int(available)))
 
 
 def _validate_trace_geometry(
@@ -1286,7 +1272,6 @@ def _run_archive_amplifier_quicklook(
     trace_provider: _QuickTraceProvider | None,
     timing: bool = False,
     memory_check: bool = False,
-    worker_count: int = 1,
     detailed_evidence: bool = False,
 ) -> tuple[
     "RawFrameData | None",
@@ -1499,7 +1484,6 @@ def _run_archive_amplifier_quicklook(
             else 0
         ),
         peak_rss_bytes=_peak_rss_bytes() if memory_check else None,
-        worker_count=worker_count,
     )
     return retained_loaded, retained_detector, topology_result, product, diagnostics
 
@@ -1761,7 +1745,6 @@ def run_virus_ifu_quicklooks(
     output_shape: tuple[int, int] | None = None,
     origin: tuple[float, float] | None = None,
     trace_provider: _QuickTraceProvider | None = None,
-    nworkers: int = 1,
     timing: bool = False,
     memory_check: bool = False,
     detailed_evidence: bool = False,
@@ -1842,8 +1825,6 @@ def run_virus_ifu_quicklooks(
                 f"missing required amplifier frame(s): {', '.join(missing)}"
             )
 
-    ifu_worker_count = _worker_count(nworkers, len(frames_by_ifu))
-
     def process_ifu(
         slot: str,
     ) -> tuple[str, VIRUSIFUQuicklookSet, QuicklookDiagnostics]:
@@ -1872,7 +1853,6 @@ def run_virus_ifu_quicklooks(
                 trace_provider=trace_provider,
                 timing=timing,
                 memory_check=memory_check,
-                worker_count=ifu_worker_count,
                 detailed_evidence=detailed_evidence,
             )
             return _unpack_archive_quicklook_result(result)
@@ -1932,7 +1912,6 @@ def run_virus_ifu_quicklooks(
             stage_seconds=stage_seconds,
             retained_array_bytes=retained_bytes,
             peak_rss_bytes=max(peak_values) if peak_values else None,
-            worker_count=ifu_worker_count,
         )
         return (
             slot,
@@ -1947,21 +1926,9 @@ def run_virus_ifu_quicklooks(
 
     processed_ifus: dict[str, tuple[VIRUSIFUQuicklookSet, QuicklookDiagnostics]] = {}
     slots = tuple(sorted(frames_by_ifu))
-    if ifu_worker_count == 1:
-        completed = (process_ifu(slot) for slot in slots)
-        for slot, result, diagnostics in completed:
-            processed_ifus[slot] = (result, diagnostics)
-    else:
-        with ThreadPoolExecutor(max_workers=ifu_worker_count) as executor:
-            futures = {executor.submit(process_ifu, slot): slot for slot in slots}
-            try:
-                for future in as_completed(futures):
-                    slot, result, diagnostics = future.result()
-                    processed_ifus[slot] = (result, diagnostics)
-            except Exception:
-                for future in futures:
-                    future.cancel()
-                raise
+    for slot in slots:
+        _, result, diagnostics = process_ifu(slot)
+        processed_ifus[slot] = (result, diagnostics)
 
     ifus = {slot: processed_ifus[slot][0] for slot in slots}
     ifu_diagnostics = {slot: processed_ifus[slot][1] for slot in slots}

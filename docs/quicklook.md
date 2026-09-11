@@ -35,12 +35,9 @@ standard-star workflow, and science exposures use the target workflow. An
 expert may use `exposure.quicklook(kind="flat")`, `kind="standard"`, or
 `kind="target"` when an explicit override is appropriate.
 
-VIRUS processing is sequential by default. For diagnostics or an explicit
-parallel experiment, the quick-look call accepts `timing=True`,
-`memory_check=True`, and `nworkers=2`. VIRUS workers process complete IFUs;
-each worker handles the four amplifiers and composes one IFU image. The
-resulting per-IFU diagnostics are available at
-`product.ifus["074"].diagnostics`.
+VIRUS processing is sequential. For diagnostics, the quick-look call accepts
+`timing=True` and `memory_check=True`. The resulting per-IFU diagnostics are
+available at `product.ifus["074"].diagnostics`.
 
 Archive-backed quick looks use the prepared detector's central 200-column
 window for flat, standard-star, and target exposures. Flats are traced from

@@ -388,7 +388,6 @@ class QuicklookExposure:
         output_shape: tuple[int, int] | None = None,
         origin: tuple[float, float] | None = None,
         resource_root: str | Path | None = None,
-        nworkers: int = 1,
         timing: bool = False,
         memory_check: bool = False,
         detailed_evidence: bool = False,
@@ -435,7 +434,6 @@ class QuicklookExposure:
                 )
             else:
                 common.update(
-                    nworkers=nworkers,
                     timing=timing,
                     memory_check=memory_check,
                 )
@@ -483,7 +481,7 @@ class QuicklookIFU:
 
     @property
     def diagnostics(self) -> workflows.QuicklookDiagnostics:
-        """Return optional timing, memory, and worker diagnostics."""
+        """Return optional timing and memory diagnostics."""
 
         return self.raw_result.diagnostics
 

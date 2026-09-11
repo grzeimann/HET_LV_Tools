@@ -1,6 +1,5 @@
 from datetime import date
 from pathlib import Path
-import threading
 
 import numpy as np
 import pytest
@@ -667,7 +666,7 @@ def test_virus_archive_workflow_fails_on_incomplete_ifu(
         )
 
 
-def test_virus_workflow_composes_one_ifu_image_and_reports_diagnostics(
+def test_virus_workflow_composes_one_ifu_image_in_sorted_order(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     slot_ids = (("074", "043"), ("075", "044"))
@@ -726,13 +725,11 @@ def test_virus_workflow_composes_one_ifu_image_and_reports_diagnostics(
         physical_identities=identities,
     )
 
-    barrier = threading.Barrier(2)
-    thread_names: set[str] = set()
+    call_order: list[str] = []
 
     def fake_run(_exposure, frame, **kwargs):
         token = frame.identity.amplifier_token
-        thread_names.add(threading.current_thread().name)
-        barrier.wait(timeout=2.0)
+        call_order.append(token)
         return (object(), object(), object(), products[token])
 
     monkeypatch.setattr(workflows, "_run_archive_amplifier_quicklook", fake_run)
@@ -741,7 +738,6 @@ def test_virus_workflow_composes_one_ifu_image_and_reports_diagnostics(
         exposure,
         trace_root=tmp_path,
         frame_type="twi",
-        nworkers=2,
         timing=True,
         memory_check=True,
     )
@@ -751,8 +747,11 @@ def test_virus_workflow_composes_one_ifu_image_and_reports_diagnostics(
     assert len(ifu.product.fiber_values) == 448
     assert ifu.product.image.shape[0] > 20
     assert ifu.product.image.shape[1] > 10
-    assert ifu.diagnostics.worker_count == 2
     assert ifu.diagnostics.retained_array_bytes > 0
     assert "ifu_composition" in ifu.diagnostics.stage_seconds
     assert set(result.diagnostics) == {"074", "075"}
-    assert len(thread_names) == 2
+    assert call_order == [
+        f"{slot}{amplifier}"
+        for slot, _ifuid in slot_ids
+        for amplifier in ("LL", "LU", "RL", "RU")
+    ]
