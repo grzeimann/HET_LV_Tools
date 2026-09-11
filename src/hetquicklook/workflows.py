@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Mapping
 
@@ -13,6 +13,7 @@ from .algorithms.centroid import Centroid, weighted_centroid
 from .algorithms.collapse import (
     DEFAULT_COLLAPSE_COLUMNS,
     DEFAULT_COLLAPSE_STATISTIC,
+    central_column_bounds,
     collapse_extracted_spectra,
     collapse_fibers,
     spatial_image_from_fiber_values,
@@ -56,6 +57,10 @@ INSTRUMENT_SPATIAL_DEFAULTS = {
 }
 LRS2_STANDARD_FIDUCIAL = LRS2_SPATIAL_DEFAULTS["intended_fiducial"]
 VIRUS_STANDARD_FIDUCIAL = VIRUS_SPATIAL_DEFAULTS["intended_fiducial"]
+
+
+class QuicklookError(RuntimeError):
+    """Raised when an archive-backed quick look cannot complete."""
 
 
 def spatial_defaults_for(
@@ -172,6 +177,9 @@ class AmplifierTopologyResult:
     physical_identity: PhysicalAmplifierIdentity
     trace_provenance: TopologyReference
     position_provenance: TopologyReference
+    trace_source: "ArchiveMember | None" = None
+    detector_column_start: int | None = None
+    detector_column_stop: int | None = None
 
 
 @dataclass(frozen=True)
@@ -207,8 +215,6 @@ class LRS2QuicklookSet:
 
     amplifier_evidence: Mapping[str, LRS2AmplifierQuicklookEvidence]
     channels: Mapping[str, LRS2ChannelQuicklook]
-    missing_amplifiers: tuple[str, ...] = ()
-    processing_failures: Mapping[str, str] = field(default_factory=dict)
 
     @property
     def amplifier_products(self) -> dict[str, SpatialQuicklook]:
@@ -226,8 +232,6 @@ class VIRUSIFUQuicklookSet:
 
     ifu_slot: str
     amplifier_evidence: Mapping[str, AmplifierQuicklookEvidence]
-    missing_amplifiers: tuple[str, ...] = ()
-    processing_failures: Mapping[str, str] = field(default_factory=dict)
 
     @property
     def amplifier_products(self) -> dict[str, SpatialQuicklook]:
@@ -270,25 +274,335 @@ class VIRUSQuicklookSet:
             for token, evidence in self.amplifier_evidence.items()
         }
 
-    @property
-    def missing_amplifiers(self) -> tuple[str, ...]:
-        """Return missing canonical amplifier tokens across all IFUs."""
 
-        return tuple(
-            token
-            for ifu in self.ifus.values()
-            for token in ifu.missing_amplifiers
+def _identity_key(identity: PhysicalAmplifierIdentity) -> tuple[object, ...]:
+    """Return the minimum physical identity used by trace resources."""
+
+    def normalized(value: str | None) -> str | None:
+        return None if value is None else str(value).strip().zfill(3)
+
+    return (
+        Instrument.from_value(identity.instrument),
+        str(identity.ifu_slot).strip().zfill(3),
+        str(identity.amplifier).strip().upper(),
+        normalized(identity.ifuid),
+        normalized(identity.specid),
+    )
+
+
+def _same_trace_identity(
+    target: PhysicalAmplifierIdentity,
+    candidate: PhysicalAmplifierIdentity,
+) -> bool:
+    """Compare the required trace-resource identity fields."""
+
+    target_key = _identity_key(target)
+    candidate_key = _identity_key(candidate)
+    if target_key[:3] != candidate_key[:3]:
+        return False
+    return all(
+        left is None or right is None or left == right
+        for left, right in zip(target_key[3:], candidate_key[3:])
+    )
+
+
+def _trace_hardware_exception(identity: PhysicalAmplifierIdentity) -> bool:
+    """Return whether the established one-row trace exception applies."""
+
+    return (
+        str(identity.specid).strip().zfill(3) == "504"
+        and str(identity.ifuid).strip().zfill(3) == "018"
+        and str(identity.amplifier).strip().upper() == "RU"
+    )
+
+
+def _as_datetime(value: object, fallback: date) -> datetime:
+    """Normalize archive time metadata for target-relative ordering."""
+
+    if isinstance(value, datetime):
+        result = value
+    elif isinstance(value, date):
+        result = datetime.combine(value, datetime.min.time())
+    elif value is None:
+        result = datetime.combine(fallback, datetime.min.time())
+    else:
+        text = str(value).strip()
+        try:
+            result = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        except ValueError:
+            try:
+                result = datetime.strptime(text[:8], "%Y%m%d")
+            except ValueError:
+                result = datetime.combine(fallback, datetime.min.time())
+    if result.tzinfo is not None:
+        result = result.astimezone(timezone.utc).replace(tzinfo=None)
+    return result
+
+
+def _required_amplifier_tokens(identity: PhysicalAmplifierIdentity) -> tuple[str, ...]:
+    """Return the complete amplifier set for one selected component."""
+
+    slot = str(identity.ifu_slot).strip().zfill(3)
+    return tuple(f"{slot}{amplifier}" for amplifier in ("LL", "LU", "RL", "RU"))
+
+
+def _validate_trace_geometry(
+    trace_result: AlgorithmResult,
+    *,
+    detector_rows: int,
+    detector_columns: int,
+    expected_fibers: int,
+    aperture_width: float,
+) -> None:
+    """Validate only geometry required for fractional-aperture extraction."""
+
+    trace_map = np.asarray(trace_result.get_array("fiber_trace_map"), dtype=float)
+    if trace_map.shape != (expected_fibers, detector_columns):
+        raise ValueError(
+            "trace map shape must be "
+            f"({expected_fibers}, {detector_columns}), found {trace_map.shape}"
+        )
+    reference = np.asarray(trace_result.get_array("trace_reference"))
+    if reference.ndim != 2 or reference.shape[0] != expected_fibers:
+        raise ValueError("trace reference and trace map fiber counts differ")
+    width = float(aperture_width)
+    if not np.isfinite(width) or width <= 0.0:
+        raise ValueError("extraction aperture width must be positive and finite")
+    if detector_rows <= 0:
+        raise ValueError("prepared detector must contain rows")
+    if not np.all(np.isfinite(trace_map)):
+        raise ValueError("trace map contains non-finite detector centers")
+
+    half_width = width / 2.0
+    if np.any(trace_map < half_width) or np.any(
+        trace_map > detector_rows - half_width
+    ):
+        raise ValueError(
+            "trace centers do not leave the requested aperture wholly inside "
+            "the prepared detector"
         )
 
-    @property
-    def processing_failures(self) -> dict[str, str]:
-        """Return amplifier processing failures keyed by full token."""
 
-        return {
-            token: message
-            for ifu in self.ifus.values()
-            for token, message in ifu.processing_failures.items()
-        }
+class _QuickTraceProvider:
+    """Resolve and cache flat-derived local traces for one quick-look night."""
+
+    def __init__(
+        self,
+        candidates: tuple[tuple["Exposure", date], ...],
+        *,
+        trace_root: str | Path,
+    ) -> None:
+        self._candidates = candidates
+        self._trace_root = Path(trace_root)
+        self._cache: dict[
+            tuple[object, ...],
+            tuple[AlgorithmResult, TopologyReference, "ArchiveMember"],
+        ] = {}
+
+    def _select_candidate(
+        self,
+        target_exposure: "Exposure",
+        target_frame: "ArchiveMember",
+        target_identity: PhysicalAmplifierIdentity,
+        *,
+        at: date | datetime | str | None,
+    ) -> tuple["Exposure", "ArchiveMember"]:
+        identity = target_frame.identity
+        if identity is None:
+            raise QuicklookError(
+                f"Quick-look failed for exposure {target_exposure.exposure_id}, "
+                "stage: target identity, reason: amplifier identity is unavailable"
+            )
+        target_token = str(identity.amplifier_token).strip().upper()
+        target_time = _as_datetime(at, date.today())
+        if target_exposure.metadata.observation_time is not None:
+            target_time = _as_datetime(
+                target_exposure.metadata.observation_time, target_time.date()
+            )
+        slot = str(target_identity.ifu_slot).strip().zfill(3)
+        matches: list[
+            tuple[float, datetime, str, str, "Exposure", "ArchiveMember"]
+        ] = []
+        for candidate, fallback_date in self._candidates:
+            classification = candidate.classification
+            if classification.quicklook_kind != "flat":
+                continue
+            if classification.applicable_ifu_slots and slot not in {
+                str(value).strip().zfill(3)
+                for value in classification.applicable_ifu_slots
+            }:
+                continue
+            for member in candidate.frames:
+                member_identity = member.identity
+                if member_identity is None:
+                    continue
+                if str(member_identity.amplifier_token).strip().upper() != target_token:
+                    continue
+                try:
+                    candidate_identity = candidate.identity_for(member)
+                except ValueError:
+                    continue
+                if not _same_trace_identity(target_identity, candidate_identity):
+                    continue
+                candidate_time = _as_datetime(
+                    candidate.metadata.observation_time, fallback_date
+                )
+                delta = abs((candidate_time - target_time).total_seconds())
+                matches.append(
+                    (
+                        delta,
+                        candidate_time,
+                        str(candidate.exposure_id),
+                        str(member.member_name),
+                        candidate,
+                        member,
+                    )
+                )
+                break
+        if not matches:
+            raise QuicklookError(
+                f"Quick-look failed for exposure {target_exposure.exposure_id}, "
+                f"amplifier {target_token}, stage: flat resolution, reason: "
+                "no suitable classified flat exists"
+            )
+        matches.sort(key=lambda item: item[:4])
+        return matches[0][4], matches[0][5]
+
+    def _require_flat_component(
+        self,
+        exposure: "Exposure",
+        target_identity: PhysicalAmplifierIdentity,
+    ) -> "ArchiveMember":
+        expected = _required_amplifier_tokens(target_identity)
+        by_token: dict[str, "ArchiveMember"] = {}
+        for member in exposure.frames:
+            identity = member.identity
+            if identity is None:
+                continue
+            token = str(identity.amplifier_token).strip().upper()
+            if token not in expected:
+                continue
+            if token in by_token:
+                raise QuicklookError(
+                    f"Quick-look failed for exposure {exposure.exposure_id}, "
+                    f"amplifier {token}, stage: flat completeness, reason: "
+                    "duplicate required amplifier frame"
+                )
+            by_token[token] = member
+        missing = [token for token in expected if token not in by_token]
+        if missing:
+            raise QuicklookError(
+                f"Quick-look failed for exposure {exposure.exposure_id}, "
+                f"amplifier {missing[0]}, stage: flat completeness, reason: "
+                f"required amplifier frame is missing; expected {', '.join(expected)}"
+            )
+        target_token = (
+            f"{str(target_identity.ifu_slot).strip().zfill(3)}"
+            f"{str(target_identity.amplifier).strip().upper()}"
+        )
+        return by_token[target_token]
+
+    def resolve(
+        self,
+        target_exposure: "Exposure",
+        target_frame: "ArchiveMember",
+        *,
+        loader: "RawFrameLoader | None",
+        at: date | datetime | str | None,
+        column_width: int,
+        extraction_width: float,
+    ) -> tuple[AlgorithmResult, TopologyReference, "ArchiveMember"]:
+        """Return a validated quick trace and its calibration provenance."""
+
+        try:
+            target_identity = target_exposure.identity_for(target_frame)
+        except Exception as error:
+            token = (
+                "unknown"
+                if target_frame.identity is None
+                else str(target_frame.identity.amplifier_token).strip().upper()
+            )
+            raise QuicklookError(
+                f"Quick-look failed for exposure {target_exposure.exposure_id}, "
+                f"amplifier {token}, stage: target identity, reason: {error}"
+            ) from error
+        candidate, _ = self._select_candidate(
+            target_exposure,
+            target_frame,
+            target_identity,
+            at=at,
+        )
+        selected_frame = self._require_flat_component(candidate, target_identity)
+        cache_key = (
+            str(selected_frame.archive_path),
+            selected_frame.outer_tar_member,
+            selected_frame.member_name,
+            _identity_key(target_identity),
+            int(column_width),
+            5,
+            1,
+        )
+        cached = self._cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        try:
+            loaded = candidate.load_frame(selected_frame, loader=loader)
+            detector = reduce_amplifier_array(loaded.data, dict(loaded.header))
+            prepared = detector.get_array("oriented_detector_image")
+        except Exception as error:
+            token = f"{target_identity.ifu_slot}{target_identity.amplifier}"
+            raise QuicklookError(
+                f"Quick-look failed for exposure {target_exposure.exposure_id}, "
+                f"amplifier {token}, stage: flat detector preparation, reason: {error}"
+            ) from error
+
+        try:
+            flat_start, flat_stop = central_column_bounds(
+                prepared.shape[1], column_width
+            )
+            trace_reference, trace_provenance = VirusTopologyLoader(
+                trace_root=self._trace_root
+            ).resolve_trace_reference(target_identity, at=at)
+        except Exception as error:
+            token = f"{target_identity.ifu_slot}{target_identity.amplifier}"
+            raise QuicklookError(
+                f"Quick-look failed for exposure {target_exposure.exposure_id}, "
+                f"amplifier {token}, stage: trace reference resolution, reason: {error}"
+            ) from error
+
+        try:
+            trace_result = fit_fiber_traces(
+                prepared[:, flat_start:flat_stop],
+                trace_reference,
+                specid=target_identity.specid,
+                ifuid=target_identity.ifuid,
+                amplifier=target_identity.amplifier,
+                n_chunks=5,
+                degree=1,
+                detector_column_start=flat_start,
+            )
+            expected_fibers = trace_reference.shape[0] - (
+                1 if _trace_hardware_exception(target_identity) else 0
+            )
+            _validate_trace_geometry(
+                trace_result,
+                detector_rows=prepared.shape[0],
+                detector_columns=flat_stop - flat_start,
+                expected_fibers=expected_fibers,
+                aperture_width=extraction_width,
+            )
+        except Exception as error:
+            token = f"{target_identity.ifu_slot}{target_identity.amplifier}"
+            raise QuicklookError(
+                f"Quick-look failed for exposure {target_exposure.exposure_id}, "
+                f"amplifier {token}, stage: quick-trace fitting or validation, "
+                f"reason: {error}"
+            ) from error
+
+        resolved = (trace_result, trace_provenance, selected_frame)
+        self._cache[cache_key] = resolved
+        return resolved
 
 
 def _dense_trace_map(topology: FiberTopology, detector_columns: int) -> np.ndarray:
@@ -640,6 +954,11 @@ def build_amplifier_topology(
     trace_root: str | Path,
     at: date | datetime | str | None = None,
     resource_root: str | Path | None = None,
+    trace_result: AlgorithmResult | None = None,
+    trace_provenance: TopologyReference | None = None,
+    trace_source: "ArchiveMember | None" = None,
+    detector_column_start: int | None = None,
+    detector_column_stop: int | None = None,
 ) -> AmplifierTopologyResult:
     """Build trace and physical-fiber topology for one prepared amplifier.
 
@@ -669,16 +988,19 @@ def build_amplifier_topology(
         controller=physical_identity.controller,
     )
     trace_loader = VirusTopologyLoader(trace_root=trace_root)
-    trace_reference, trace_provenance = trace_loader.resolve_trace_reference(
-        identity, at=at
-    )
-    trace_result = fit_fiber_traces(
-        image,
-        trace_reference,
-        specid=identity.specid,
-        ifuid=identity.ifuid,
-        amplifier=identity.amplifier,
-    )
+    if trace_result is None:
+        trace_reference, trace_provenance = trace_loader.resolve_trace_reference(
+            identity, at=at
+        )
+        trace_result = fit_fiber_traces(
+            image,
+            trace_reference,
+            specid=identity.specid,
+            ifuid=identity.ifuid,
+            amplifier=identity.amplifier,
+        )
+    elif trace_provenance is None:
+        _, trace_provenance = trace_loader.resolve_trace_reference(identity, at=at)
     trace_map = trace_result.get_array("fiber_trace_map")
 
     if identity.instrument is Instrument.LRS2:
@@ -703,11 +1025,7 @@ def build_amplifier_topology(
     # still contains the reference row, which is removed here to preserve the
     # detector-to-position correspondence.
     if positions.shape[0] != trace_map.shape[0]:
-        special_case = (
-            str(identity.specid).zfill(3) == "504"
-            and str(identity.ifuid).zfill(3) == "018"
-            and identity.amplifier == "RU"
-        )
+        special_case = _trace_hardware_exception(identity)
         if not special_case or positions.shape[0] != trace_map.shape[0] + 1:
             raise ValueError("Trace and position fiber counts do not match")
         positions = positions[:-1]
@@ -732,6 +1050,9 @@ def build_amplifier_topology(
         physical_identity=identity,
         trace_provenance=trace_provenance,
         position_provenance=position_provenance,
+        trace_source=trace_source,
+        detector_column_start=detector_column_start,
+        detector_column_stop=detector_column_stop,
     )
 
 
@@ -753,52 +1074,143 @@ def _run_archive_amplifier_quicklook(
     grid_padding_arcsec: float | None,
     output_shape: tuple[int, int] | None,
     origin: tuple[float, float] | None,
+    trace_provider: _QuickTraceProvider | None,
 ) -> tuple["RawFrameData", AlgorithmResult, AmplifierTopologyResult, SpatialQuicklook]:
     """Run the shared archive-backed amplifier path once."""
 
-    loaded = exposure.load_frame(frame, loader=loader)
-    detector = reduce_amplifier_array(loaded.data, dict(loaded.header))
-    topology_result = build_amplifier_topology(
-        detector.get_array("oriented_detector_image"),
-        exposure.identity_for(frame),
-        trace_root=trace_root,
-        at=at,
-        resource_root=resource_root,
-    )
-    prepared_detector = detector.get_array("oriented_detector_image")
-    detector_variance = detector.get_array("detector_variance")
+    try:
+        identity = exposure.identity_for(frame)
+    except Exception as error:
+        token = (
+            "unknown"
+            if frame.identity is None
+            else str(frame.identity.amplifier_token).strip().upper()
+        )
+        raise QuicklookError(
+            f"Quick-look failed for exposure {exposure.exposure_id}, "
+            f"amplifier {token}, stage: target identity, reason: {error}"
+        ) from error
+    token = f"{identity.ifu_slot}{identity.amplifier}"
+    try:
+        loaded = exposure.load_frame(frame, loader=loader)
+        detector = reduce_amplifier_array(loaded.data, dict(loaded.header))
+    except Exception as error:
+        raise QuicklookError(
+            f"Quick-look failed for exposure {exposure.exposure_id}, "
+            f"amplifier {token}, stage: target detector preparation, reason: {error}"
+        ) from error
+
+    prepared_full = detector.get_array("oriented_detector_image")
+    variance_full = detector.get_array("detector_variance")
+    prepared_detector = prepared_full
+    detector_variance = variance_full
+    trace_result: AlgorithmResult | None = None
+    trace_provenance: TopologyReference | None = None
+    trace_source: "ArchiveMember | None" = None
+    detector_column_start: int | None = None
+    detector_column_stop: int | None = None
+    if trace_provider is not None and quicklook_kind in {"standard", "target"}:
+        trace_result, trace_provenance, trace_source = trace_provider.resolve(
+            exposure,
+            frame,
+            loader=loader,
+            at=at,
+            column_width=collapse_columns,
+            extraction_width=detector_extraction_width,
+        )
+        detector_column_start, detector_column_stop = central_column_bounds(
+            prepared_full.shape[1], collapse_columns
+        )
+        prepared_detector = prepared_full[:, detector_column_start:detector_column_stop]
+        detector_variance = variance_full[:, detector_column_start:detector_column_stop]
+        _validate_trace_geometry(
+            trace_result,
+            detector_rows=prepared_detector.shape[0],
+            detector_columns=prepared_detector.shape[1],
+            expected_fibers=trace_result.get_array("fiber_trace_map").shape[0],
+            aperture_width=detector_extraction_width,
+        )
+    elif quicklook_kind in {"standard", "target"}:
+        raise QuicklookError(
+            f"Quick-look failed for exposure {exposure.exposure_id}, "
+            f"amplifier {token}, stage: trace resolution, reason: "
+            "a flat-derived trace provider is required for target extraction"
+        )
+
+    try:
+        topology_result = build_amplifier_topology(
+            prepared_detector,
+            identity,
+            trace_root=trace_root,
+            at=at,
+            resource_root=resource_root,
+            trace_result=trace_result,
+            trace_provenance=trace_provenance,
+            trace_source=trace_source,
+            detector_column_start=detector_column_start,
+            detector_column_stop=detector_column_stop,
+        )
+    except Exception as error:
+        raise QuicklookError(
+            f"Quick-look failed for exposure {exposure.exposure_id}, "
+            f"amplifier {token}, stage: topology construction, reason: {error}"
+        ) from error
     instrument = Instrument.from_value(topology_result.physical_identity.instrument)
-    if quicklook_kind == "flat":
-        product = run_ldls_flat_quicklook(
-            prepared_detector,
-            topology_result.topology,
-            detector_variance=detector_variance,
-            extraction_width=detector_extraction_width,
-            collapse_columns=collapse_columns,
-            statistic=collapse_statistic,
-            gaussian_fwhm=gaussian_fwhm_arcsec,
-            pixel_scale=pixel_scale_arcsec,
-            grid_padding_arcsec=grid_padding_arcsec,
-            instrument=instrument,
-            output_shape=output_shape,
-            origin=origin,
-        )
-    else:
-        product = run_standard_star_quicklook(
-            prepared_detector,
-            topology_result.topology,
-            requested_position=requested_position,
-            detector_variance=detector_variance,
-            extraction_width=detector_extraction_width,
-            collapse_columns=collapse_columns,
-            statistic=collapse_statistic,
-            gaussian_fwhm=gaussian_fwhm_arcsec,
-            pixel_scale=pixel_scale_arcsec,
-            grid_padding_arcsec=grid_padding_arcsec,
-            instrument=instrument,
-            output_shape=output_shape,
-            origin=origin,
-        )
+    try:
+        if quicklook_kind == "flat":
+            product = run_ldls_flat_quicklook(
+                prepared_detector,
+                topology_result.topology,
+                detector_variance=detector_variance,
+                extraction_width=detector_extraction_width,
+                collapse_columns=collapse_columns,
+                statistic=collapse_statistic,
+                gaussian_fwhm=gaussian_fwhm_arcsec,
+                pixel_scale=pixel_scale_arcsec,
+                grid_padding_arcsec=grid_padding_arcsec,
+                instrument=instrument,
+                output_shape=output_shape,
+                origin=origin,
+            )
+        elif quicklook_kind == "standard":
+            product = run_standard_star_quicklook(
+                prepared_detector,
+                topology_result.topology,
+                requested_position=requested_position,
+                detector_variance=detector_variance,
+                extraction_width=detector_extraction_width,
+                collapse_columns=collapse_columns,
+                statistic=collapse_statistic,
+                gaussian_fwhm=gaussian_fwhm_arcsec,
+                pixel_scale=pixel_scale_arcsec,
+                grid_padding_arcsec=grid_padding_arcsec,
+                instrument=instrument,
+                output_shape=output_shape,
+                origin=origin,
+            )
+        elif quicklook_kind == "target":
+            product = _spatial_quicklook(
+                prepared_detector,
+                topology_result.topology,
+                detector_variance=detector_variance,
+                extraction_width=detector_extraction_width,
+                collapse_columns=collapse_columns,
+                statistic=collapse_statistic,
+                gaussian_fwhm=gaussian_fwhm_arcsec,
+                pixel_scale=pixel_scale_arcsec,
+                grid_padding_arcsec=grid_padding_arcsec,
+                instrument=instrument,
+                output_shape=output_shape,
+                origin=origin,
+            )
+        else:
+            raise ValueError(f"Unsupported quicklook_kind: {quicklook_kind!r}")
+    except Exception as error:
+        stage = "target extraction" if quicklook_kind == "target" else "quick-look extraction"
+        raise QuicklookError(
+            f"Quick-look failed for exposure {exposure.exposure_id}, "
+            f"amplifier {token}, stage: {stage}, reason: {error}"
+        ) from error
     return loaded, detector, topology_result, product
 
 
@@ -820,18 +1232,14 @@ def run_lrs2_channel_quicklooks(
     grid_padding_arcsec: float | None = None,
     output_shape: tuple[int, int] | None = None,
     origin: tuple[float, float] | None = None,
-    allow_partial: bool = False,
+    trace_provider: _QuickTraceProvider | None = None,
 ) -> LRS2QuicklookSet:
     """Run the established amplifier path and compose all four LRS2 channels.
 
-    Each expected amplifier is loaded, reduced, traced, extracted, and
-    collapsed independently.  Composition happens only through the existing
-    physical-fiber/value boundary in :func:`combine_lrs2_channels`.
-
-    The helper requires the complete eight-amplifier set for the requested
-    frame type by default. With ``allow_partial=True``, available amplifier
-    evidence is retained and only complete two-amplifier channels are
-    composed.
+    Each of the eight expected amplifiers is loaded, reduced, traced,
+    extracted, and collapsed independently. Composition happens only through
+    the existing physical-fiber/value boundary in
+    :func:`combine_lrs2_channels`.
     """
 
     exposure_instruments = {
@@ -841,8 +1249,8 @@ def run_lrs2_channel_quicklooks(
     if exposure_instruments != {Instrument.LRS2}:
         raise ValueError("run_lrs2_channel_quicklooks requires an LRS2 exposure")
     kind = str(quicklook_kind).strip().casefold()
-    if kind not in {"flat", "standard"}:
-        raise ValueError("quicklook_kind must be 'flat' or 'standard'")
+    if kind not in {"flat", "standard", "target"}:
+        raise ValueError("quicklook_kind must be 'flat', 'standard', or 'target'")
 
     if frame_type is None:
         frame_type = exposure.metadata.frame_type
@@ -873,43 +1281,36 @@ def run_lrs2_channel_quicklooks(
         frames_by_token[token] = frame
 
     missing = [token for token in expected_tokens if token not in frames_by_token]
-    if missing and not allow_partial:
-        raise ValueError(
-            "Cannot create complete LRS2 channel products; missing amplifier "
-            f"frame(s): {', '.join(missing)}"
+    if missing:
+        raise QuicklookError(
+            f"Quick-look failed for exposure {exposure.exposure_id}, "
+            "stage: target amplifier completeness, reason: missing required "
+            f"amplifier frame(s): {', '.join(missing)}"
         )
 
     active_loader = loader
     evidence: dict[str, LRS2AmplifierQuicklookEvidence] = {}
-    processing_failures: dict[str, str] = {}
     for token in expected_tokens:
-        if token not in frames_by_token:
-            continue
         frame = frames_by_token[token]
-        try:
-            loaded, detector, topology_result, product = _run_archive_amplifier_quicklook(
-                exposure,
-                frame,
-                trace_root=trace_root,
-                at=at,
-                quicklook_kind=kind,
-                loader=active_loader,
-                resource_root=resource_root,
-                requested_position=requested_position,
-                detector_extraction_width=detector_extraction_width,
-                collapse_columns=collapse_columns,
-                collapse_statistic=collapse_statistic,
-                gaussian_fwhm_arcsec=gaussian_fwhm_arcsec,
-                pixel_scale_arcsec=pixel_scale_arcsec,
-                grid_padding_arcsec=grid_padding_arcsec,
-                output_shape=output_shape,
-                origin=origin,
-            )
-        except Exception as error:
-            if not allow_partial:
-                raise
-            processing_failures[token] = f"{type(error).__name__}: {error}"
-            continue
+        loaded, detector, topology_result, product = _run_archive_amplifier_quicklook(
+            exposure,
+            frame,
+            trace_root=trace_root,
+            at=at,
+            quicklook_kind=kind,
+            loader=active_loader,
+            resource_root=resource_root,
+            requested_position=requested_position,
+            detector_extraction_width=detector_extraction_width,
+            collapse_columns=collapse_columns,
+            collapse_statistic=collapse_statistic,
+            gaussian_fwhm_arcsec=gaussian_fwhm_arcsec,
+            pixel_scale_arcsec=pixel_scale_arcsec,
+            grid_padding_arcsec=grid_padding_arcsec,
+            output_shape=output_shape,
+            origin=origin,
+            trace_provider=trace_provider,
+        )
         evidence[token] = LRS2AmplifierQuicklookEvidence(
             frame=frame,
             loaded=loaded,
@@ -918,40 +1319,17 @@ def run_lrs2_channel_quicklooks(
             product=product,
         )
 
-    if allow_partial:
-        channels: dict[str, LRS2ChannelQuicklook] = {}
-        for channel in ("UV", "Orange", "Red", "Far-Red"):
-            tokens = lrs2_amplifier_tokens_for_channel(channel)
-            if not all(token in evidence for token in tokens):
-                continue
-            try:
-                channels[channel] = combine_lrs2_channel_products(
-                    channel,
-                    {token: evidence[token].product for token in tokens},
-                    gaussian_fwhm_arcsec=gaussian_fwhm_arcsec,
-                    pixel_scale_arcsec=pixel_scale_arcsec,
-                    grid_padding_arcsec=grid_padding_arcsec,
-                    output_shape=output_shape,
-                    origin=origin,
-                )
-            except Exception as error:
-                processing_failures[f"channel:{channel}"] = (
-                    f"{type(error).__name__}: {error}"
-                )
-    else:
-        channels = combine_lrs2_channels(
-            {token: item.product for token, item in evidence.items()},
-            gaussian_fwhm_arcsec=gaussian_fwhm_arcsec,
-            pixel_scale_arcsec=pixel_scale_arcsec,
-            grid_padding_arcsec=grid_padding_arcsec,
-            output_shape=output_shape,
-            origin=origin,
-        )
+    channels = combine_lrs2_channels(
+        {token: item.product for token, item in evidence.items()},
+        gaussian_fwhm_arcsec=gaussian_fwhm_arcsec,
+        pixel_scale_arcsec=pixel_scale_arcsec,
+        grid_padding_arcsec=grid_padding_arcsec,
+        output_shape=output_shape,
+        origin=origin,
+    )
     return LRS2QuicklookSet(
         amplifier_evidence=evidence,
         channels=channels,
-        missing_amplifiers=tuple(missing),
-        processing_failures=processing_failures,
     )
 
 
@@ -973,6 +1351,7 @@ def run_virus_ifu_quicklooks(
     grid_padding_arcsec: float | None = None,
     output_shape: tuple[int, int] | None = None,
     origin: tuple[float, float] | None = None,
+    trace_provider: _QuickTraceProvider | None = None,
 ) -> VIRUSQuicklookSet:
     """Run archive-backed VIRUS amplifier quick looks grouped by IFU.
 
@@ -987,8 +1366,10 @@ def run_virus_ifu_quicklooks(
     if exposure_instruments != {Instrument.VIRUS}:
         raise ValueError("run_virus_ifu_quicklooks requires a VIRUS exposure")
     kind = str(quicklook_kind).strip().casefold()
-    if kind not in {"flat", "standard"}:
-        raise ValueError("quicklook_kind must be 'flat' or 'standard'")
+    if kind not in {"flat", "standard", "target"}:
+        raise ValueError(
+            "quicklook_kind must be 'flat', 'standard', or 'target'"
+        )
     if frame_type is None:
         frame_type = exposure.metadata.frame_type
     if frame_type is None:
@@ -1002,7 +1383,14 @@ def run_virus_ifu_quicklooks(
         identity = frame.identity
         if identity is None or str(identity.frame_type).strip().casefold() != requested_frame_type:
             continue
-        physical = exposure.identity_for(frame)
+        try:
+            physical = exposure.identity_for(frame)
+        except Exception as error:
+            token = str(identity.amplifier_token).strip().upper()
+            raise QuicklookError(
+                f"Quick-look failed for exposure {exposure.exposure_id}, "
+                f"amplifier {token}, stage: target identity, reason: {error}"
+            ) from error
         if physical.instrument is not Instrument.VIRUS:
             continue
         slot = str(physical.ifu_slot).strip().zfill(3)
@@ -1017,38 +1405,51 @@ def run_virus_ifu_quicklooks(
             )
         by_amplifier[amplifier] = frame
 
+    if not frames_by_ifu:
+        raise QuicklookError(
+            f"Quick-look failed for exposure {exposure.exposure_id}, "
+            "stage: target amplifier completeness, reason: no required "
+            "VIRUS IFU amplifier frames found"
+        )
+
     ifus: dict[str, VIRUSIFUQuicklookSet] = {}
     for slot in sorted(frames_by_ifu):
         by_amplifier = frames_by_ifu[slot]
+        missing = tuple(
+            f"{slot}{amplifier}"
+            for amplifier in expected_amplifiers
+            if amplifier not in by_amplifier
+        )
+        if missing:
+            raise QuicklookError(
+                f"Quick-look failed for exposure {exposure.exposure_id}, "
+                f"IFU {slot}, stage: target amplifier completeness, reason: "
+                f"missing required amplifier frame(s): {', '.join(missing)}"
+            )
+
         evidence: dict[str, AmplifierQuicklookEvidence] = {}
-        failures: dict[str, str] = {}
         for amplifier in expected_amplifiers:
-            frame = by_amplifier.get(amplifier)
-            if frame is None:
-                continue
+            frame = by_amplifier[amplifier]
             token = f"{slot}{amplifier}"
-            try:
-                loaded, detector, topology_result, product = _run_archive_amplifier_quicklook(
-                    exposure,
-                    frame,
-                    trace_root=trace_root,
-                    at=at,
-                    quicklook_kind=kind,
-                    loader=loader,
-                    resource_root=resource_root,
-                    requested_position=requested_position,
-                    detector_extraction_width=detector_extraction_width,
-                    collapse_columns=collapse_columns,
-                    collapse_statistic=collapse_statistic,
-                    gaussian_fwhm_arcsec=gaussian_fwhm_arcsec,
-                    pixel_scale_arcsec=pixel_scale_arcsec,
-                    grid_padding_arcsec=grid_padding_arcsec,
-                    output_shape=output_shape,
-                    origin=origin,
-                )
-            except Exception as error:
-                failures[token] = f"{type(error).__name__}: {error}"
-                continue
+            loaded, detector, topology_result, product = _run_archive_amplifier_quicklook(
+                exposure,
+                frame,
+                trace_root=trace_root,
+                at=at,
+                quicklook_kind=kind,
+                loader=loader,
+                resource_root=resource_root,
+                requested_position=requested_position,
+                detector_extraction_width=detector_extraction_width,
+                collapse_columns=collapse_columns,
+                collapse_statistic=collapse_statistic,
+                gaussian_fwhm_arcsec=gaussian_fwhm_arcsec,
+                pixel_scale_arcsec=pixel_scale_arcsec,
+                grid_padding_arcsec=grid_padding_arcsec,
+                output_shape=output_shape,
+                origin=origin,
+                trace_provider=trace_provider,
+            )
             evidence[token] = AmplifierQuicklookEvidence(
                 frame=frame,
                 loaded=loaded,
@@ -1056,18 +1457,10 @@ def run_virus_ifu_quicklooks(
                 topology=topology_result,
                 product=product,
             )
-        missing = tuple(
-            f"{slot}{amplifier}"
-            for amplifier in expected_amplifiers
-            if amplifier not in by_amplifier
+        ifus[slot] = VIRUSIFUQuicklookSet(
+            ifu_slot=slot,
+            amplifier_evidence=evidence,
         )
-        if evidence or missing or failures:
-            ifus[slot] = VIRUSIFUQuicklookSet(
-                ifu_slot=slot,
-                amplifier_evidence=evidence,
-                missing_amplifiers=missing,
-                processing_failures=failures,
-            )
     return VIRUSQuicklookSet(ifus=ifus)
 
 

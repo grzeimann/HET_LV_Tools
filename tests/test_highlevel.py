@@ -178,11 +178,11 @@ def test_quicklook_dispatches_from_existing_classification(
     assert product.kind == "flat"
     assert calls["quicklook_kind"] == "flat"
     assert calls["frame_type"] == "flt"
-    assert calls["allow_partial"] is True
+    assert calls["trace_provider"] is night._trace_provider
 
 
-def test_unsupported_science_requires_explicit_supported_classification(
-    tmp_path: Path,
+def test_science_dispatches_to_target_workflow(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     observation = _observation(tmp_path, "obs-1", [("exp-1", "sci", "unknown")])
     from hetquicklook.highlevel import QuicklookNight
@@ -195,8 +195,19 @@ def test_unsupported_science_requires_explicit_supported_classification(
         observations=(observation,),
     )
 
-    with pytest.raises(ValueError, match="no supported automatic quick look"):
-        night[0].quicklook()
+    calls = {}
+
+    def fake_run(exposure, **kwargs):
+        calls.update(kwargs)
+        return LRS2QuicklookSet(amplifier_evidence={}, channels={})
+
+    monkeypatch.setattr(
+        "hetquicklook.highlevel.workflows.run_lrs2_channel_quicklooks", fake_run
+    )
+    product = night[0].quicklook()
+
+    assert product.kind == "target"
+    assert calls["quicklook_kind"] == "target"
 
 
 def test_quicklook_dispatches_recognized_standard_to_standard_workflow(

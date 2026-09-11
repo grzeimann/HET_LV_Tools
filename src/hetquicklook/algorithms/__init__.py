@@ -9,6 +9,7 @@ from .collapse import (
     collapse_extracted_spectra,
     collapse_fiber_spectra,
     collapse_spectra,
+    central_column_bounds,
     select_central_columns,
     spatial_image_from_fiber_values,
 )
@@ -51,6 +52,7 @@ __all__ = [
     "collapse_extracted_spectra",
     "collapse_fiber_spectra",
     "collapse_spectra",
+    "central_column_bounds",
     "select_central_columns",
     "extract_fractional_aperture",
     "extract_trace",

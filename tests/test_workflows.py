@@ -18,6 +18,7 @@ from hetquicklook.workflows import (
     LRS2ChannelQuicklook,
     LRS2_SPATIAL_DEFAULTS,
     PointingQuicklook,
+    QuicklookError,
     SpatialQuicklook,
     VIRUS_SPATIAL_DEFAULTS,
     combine_lrs2_channel_products,
@@ -461,7 +462,7 @@ def test_lrs2_batch_workflow_retains_amplifier_evidence_and_channels(
     assert len(calls) == 8
 
 
-def test_lrs2_batch_workflow_can_retain_partial_amplifier_evidence(
+def test_lrs2_batch_workflow_fails_on_missing_required_amplifier(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     tokens = (
@@ -541,21 +542,16 @@ def test_lrs2_batch_workflow_can_retain_partial_amplifier_evidence(
         ),
     )
 
-    result = run_lrs2_channel_quicklooks(
-        exposure,
-        trace_root=tmp_path,
-        frame_type="twi",
-        loader=Loader(),
-        allow_partial=True,
-    )
-
-    assert result.missing_amplifiers == ("056LU",)
-    assert "056LU" not in result.amplifier_evidence
-    assert tuple(result.channels) == ("Orange", "Red", "Far-Red")
-    assert result.processing_failures == {}
+    with pytest.raises(QuicklookError, match="056LU"):
+        run_lrs2_channel_quicklooks(
+            exposure,
+            trace_root=tmp_path,
+            frame_type="twi",
+            loader=Loader(),
+        )
 
 
-def test_virus_archive_workflow_groups_evidence_by_ifu(
+def test_virus_archive_workflow_fails_on_incomplete_ifu(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     tokens = (
@@ -601,12 +597,7 @@ def test_virus_archive_workflow_groups_evidence_by_ifu(
         lambda *args, **kwargs: (object(), object(), object(), amplifier_product),
     )
 
-    result = workflows.run_virus_ifu_quicklooks(
-        exposure, trace_root=tmp_path, frame_type="twi"
-    )
-
-    assert tuple(result.ifus) == ("074", "075")
-    assert set(result.ifus["074"].amplifier_evidence) == {
-        "074LL", "074LU", "074RL", "074RU"
-    }
-    assert result.ifus["075"].missing_amplifiers == ("075RU",)
+    with pytest.raises(QuicklookError, match="075RU"):
+        workflows.run_virus_ifu_quicklooks(
+            exposure, trace_root=tmp_path, frame_type="twi"
+        )

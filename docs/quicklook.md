@@ -30,23 +30,22 @@ Python indexing, so `night[19]` selects the row labelled `19`. The selected
 `classification` attributes.
 
 Automatic dispatch uses the existing deterministic classification. Recognized
-LDLS or Qth flats use the flat workflow, and catalog-matched standard stars use
-the standard-star workflow. Unsupported science or unrecognized calibration
-exposures raise a descriptive error rather than being guessed. An expert may
-use `exposure.quicklook(kind="flat")` or `kind="standard"` when an explicit
-override is appropriate.
+LDLS or Qth flats use the flat workflow, catalog-matched standard stars use the
+standard-star workflow, and science exposures use the target workflow. An
+expert may use `exposure.quicklook(kind="flat")`, `kind="standard"`, or
+`kind="target"` when an explicit override is appropriate.
 
-For LRS2, `product.channels` contains every complete UV, Orange, Red, and
-Far-Red channel that can be formed from the archive evidence. The product also
-retains `product.raw_result`, `product.amplifier_evidence`,
-`product.missing_amplifiers`, and `product.processing_failures`. A channel is
-created only from its two required 140-fiber amplifier products.
+For LRS2, successful `product.channels` contains the complete UV, Orange, Red,
+Far-Red channel set. Missing required amplifier files or processing failures
+raise a contextual `QuicklookError`; no partial scientific product is returned.
+The product retains `product.raw_result` and `product.amplifier_evidence`.
+A channel is created only from its two required 140-fiber amplifier products.
 
-For VIRUS, `product.ifus` groups the available amplifier evidence by physical
-IFU slot. No arbitrary IFU or amplifier is selected. If one IFU is present,
-`product.plot()` renders its available amplifier evidence; with multiple IFUs,
-select one explicitly with `product.plot(ifu="074")`. A whole-VIRUS
-focal-plane composition is outside this workflow layer.
+For VIRUS, `product.ifus` groups the complete four-amplifier evidence by
+physical IFU slot. No arbitrary IFU or amplifier is selected. If one IFU is
+present, `product.plot()` renders its amplifier evidence; with multiple IFUs,
+select one explicitly with `product.plot(ifu="074")`. A whole-VIRUS focal-plane
+composition is outside this workflow layer.
 
 The high-level objects are orchestration and presentation wrappers. The
 lower-level numerical workflows remain useful when an expert needs direct
@@ -119,14 +118,11 @@ archives or load raw files.
 
 `run_lrs2_channel_quicklooks` is the thin archive-facing composition helper
 for an already discovered `Exposure`; it loads its raw members on demand. It
-runs the same independent amplifier path
-for the eight expected LRS2 amplifier tokens, retains each
-`LRS2AmplifierQuicklookEvidence` record, and returns an `LRS2QuicklookSet`
-containing both the amplifier products and complete channel products. Its
-default direct workflow requires all eight requested frame members. The
-high-level API uses `allow_partial=True` to retain available evidence and
-compose only complete channel pairs, with missing amplifiers and processing
-failures recorded separately.
+runs the same independent amplifier path for the eight expected LRS2 amplifier
+tokens, retains each `LRS2AmplifierQuicklookEvidence` record, and returns an
+`LRS2QuicklookSet` containing both the amplifier products and complete channel
+products. Missing required members or processing failures raise a contextual
+`QuicklookError` before a result is returned.
 
 The reusable Matplotlib functions in `hetquicklook.visualization` include
 `plot_spatial_image`, `plot_fiber_values`, `plot_spatial_support`,

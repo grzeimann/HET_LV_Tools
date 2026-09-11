@@ -10,7 +10,7 @@ import numpy as np
 from .results import AlgorithmResult
 
 
-TRACE_ALGORITHM_VERSION = "trace-1.1"
+TRACE_ALGORITHM_VERSION = "trace-1.2"
 DEFAULT_TRACE_CHUNKS = 40
 DEFAULT_TRACE_DEGREE = 4
 
@@ -208,6 +208,7 @@ def fit_fiber_traces(
     master_flat_array: np.ndarray | None = None,
     n_chunks: int = DEFAULT_TRACE_CHUNKS,
     degree: int = DEFAULT_TRACE_DEGREE,
+    detector_column_start: int = 0,
 ) -> AlgorithmResult:
     """Fit a dense detector trace map from a loaded continuum flat.
 
@@ -221,6 +222,9 @@ def fit_fiber_traces(
             ``504/018/RU`` hardware exception.
         zipcode: Optional object with ``specid``, ``ifuid``, and ``amp``
             attributes, retained as a convenient identity adapter.
+        detector_column_start: Original prepared-detector column corresponding
+            to local column zero. This records provenance only; all returned
+            trace coordinates remain local to ``continuum_flat``.
 
     Returns:
         Named dense trace and trace QA arrays.  The first dimension follows
@@ -241,6 +245,14 @@ def fit_fiber_traces(
     reference = np.atleast_2d(np.asarray(trace_reference, dtype=float))
     if image.ndim != 2 or reference.ndim != 2 or reference.shape[1] < 2:
         raise ValueError("continuum_flat must be 2D and trace_reference must be Nx2")
+    try:
+        column_start = int(detector_column_start)
+    except (TypeError, ValueError) as error:
+        raise ValueError("detector_column_start must be an integer") from error
+    if column_start < 0:
+        raise ValueError("detector_column_start must be nonnegative")
+    if image.shape[1] <= 0:
+        raise ValueError("continuum_flat must contain at least one detector column")
     if reference.shape[0] == 0:
         raise ValueError("trace_reference must contain at least one fiber")
     chunks = int(n_chunks)
@@ -303,10 +315,22 @@ def fit_fiber_traces(
             "trace_interpolated_fiber_mask": interpolated,
             "trace_reference": reference,
         },
-        scalars={"trace_len": int(image.shape[1])},
+        scalars={
+            "trace_len": int(image.shape[1]),
+            "trace_n_chunks": chunks,
+            "trace_degree_requested": int(degree),
+            "trace_column_start": column_start,
+            "trace_column_stop": column_start + int(image.shape[1]),
+        },
         metadata={
             "trace_map_shape": list(dense.shape),
-            "trace_model": "per_fiber_degree_at_most_4_huber_polynomial",
+            "trace_model": "per_fiber_huber_polynomial",
+            "trace_n_chunks": chunks,
+            "trace_degree_requested": int(degree),
+            "trace_column_bounds": [
+                column_start,
+                column_start + int(image.shape[1]),
+            ],
             "trace_sample_state": (
                 "measured_active_fibers_or_reference_offset_for_configured_dead_fibers"
             ),

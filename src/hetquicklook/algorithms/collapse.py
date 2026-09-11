@@ -15,12 +15,25 @@ DEFAULT_COLLAPSE_COLUMNS = 200
 DEFAULT_COLLAPSE_STATISTIC = "median"
 
 
-def _central_column_bounds(n_columns: int, requested: int) -> tuple[int, int]:
-    """Return the actual centered half-open column bounds."""
+def central_column_bounds(
+    n_columns: int,
+    requested: int = DEFAULT_COLLAPSE_COLUMNS,
+) -> tuple[int, int]:
+    """Return centered half-open column bounds for a detector axis."""
 
-    selected_width = min(requested, n_columns)
-    start = max(0, n_columns // 2 - selected_width // 2)
-    start = min(start, n_columns - selected_width)
+    try:
+        available = int(n_columns)
+        width = int(requested)
+    except (TypeError, ValueError) as error:
+        raise ValueError("column counts must be integers") from error
+    if available <= 0:
+        raise ValueError("n_columns must be positive")
+    if width <= 0:
+        raise ValueError("requested column width must be positive")
+
+    selected_width = min(width, available)
+    start = max(0, available // 2 - selected_width // 2)
+    start = min(start, available - selected_width)
     return start, start + selected_width
 
 
@@ -45,7 +58,7 @@ def select_central_columns(
         raise ValueError("collapse_columns must be a positive integer") from error
     if requested <= 0:
         raise ValueError("collapse_columns must be a positive integer")
-    start, stop = _central_column_bounds(values.shape[1], requested)
+    start, stop = central_column_bounds(values.shape[1], requested)
     return values[:, start:stop]
 
 
@@ -93,7 +106,7 @@ def collapse_extracted_spectra(
             variance_array, collapse_columns=collapse_columns
         )
     fiber_values, counts = _reduce_rows(selected, statistic)
-    central_start, _ = _central_column_bounds(values.shape[1], int(collapse_columns))
+    central_start, _ = central_column_bounds(values.shape[1], int(collapse_columns))
     fiber_variance: np.ndarray | None = None
     if selected_variance is not None and statistic in {"mean", "sum"}:
         valid_variance = np.isfinite(selected) & np.isfinite(selected_variance)

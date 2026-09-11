@@ -110,6 +110,30 @@ def test_trace_shape_and_qa_follow_reference_fiber_count(nfiber: int) -> None:
     assert result.get_array("trace_interpolated_fiber_mask")[17] == 1
 
 
+def test_quick_trace_is_local_and_records_requested_fit_parameters() -> None:
+    flat, reference = _synthetic_flat(20)
+    local_start, local_stop = 11, 61
+    result = fit_fiber_traces(
+        flat[:, local_start:local_stop],
+        reference,
+        specid="412",
+        ifuid="043",
+        amplifier="LL",
+        n_chunks=5,
+        degree=1,
+        detector_column_start=local_start,
+    )
+
+    assert result.get_array("fiber_trace_map").shape == (20, local_stop - local_start)
+    assert result.get_array("trace_sample_columns").shape == (5,)
+    assert result.scalars["trace_n_chunks"] == 5
+    assert result.scalars["trace_degree_requested"] == 1
+    assert result.scalars["trace_column_start"] == local_start
+    assert result.scalars["trace_column_stop"] == local_stop
+    assert result.metadata["trace_model"] == "per_fiber_huber_polynomial"
+    assert result.metadata["trace_column_bounds"] == [local_start, local_stop]
+
+
 def test_trace_preserves_demonstrated_virus_hardware_exception() -> None:
     flat = np.zeros((20, 80), dtype=float)
     y = np.arange(20, dtype=float)[:, None]

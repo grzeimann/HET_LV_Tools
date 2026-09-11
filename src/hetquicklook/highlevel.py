@@ -202,6 +202,7 @@ class QuicklookNight:
     discovered: tuple[DiscoveredObservation, ...]
     observations: tuple[Observation, ...]
     _exposures: tuple["QuicklookExposure", ...] = field(init=False, repr=False)
+    _trace_provider: workflows._QuickTraceProvider = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         parsed = Instrument.from_value(self.instrument)
@@ -224,6 +225,19 @@ class QuicklookNight:
                     )
                 )
         object.__setattr__(self, "_exposures", tuple(entries))
+        candidates = tuple(
+            (raw_exposure, observation.discovered.date)
+            for observation in self.observations
+            for raw_exposure in observation.exposures
+        )
+        object.__setattr__(
+            self,
+            "_trace_provider",
+            workflows._QuickTraceProvider(
+                candidates,
+                trace_root=self.site.trace_root,
+            ),
+        )
 
     @property
     def exposures(self) -> tuple["QuicklookExposure", ...]:
@@ -342,14 +356,18 @@ class QuicklookExposure:
                 return "flat"
             if self.classification.standard_star is True:
                 return "standard"
+            if self.metadata.frame_class == "science":
+                return "target"
             raise ValueError(
                 f"Exposure {self.exposure_id!r} is classified as {self.kind!r} "
                 "and has no supported automatic quick look; use an established "
                 "flat or recognized standard-star exposure, or pass an explicit kind."
             )
         resolved = str(kind).strip().casefold()
-        if resolved not in {"flat", "standard"}:
-            raise ValueError("kind must be 'flat', 'standard', or None for automatic dispatch")
+        if resolved not in {"flat", "standard", "target"}:
+            raise ValueError(
+                "kind must be 'flat', 'standard', 'target', or None for automatic dispatch"
+            )
         return resolved
 
     def quicklook(
@@ -399,11 +417,11 @@ class QuicklookExposure:
             grid_padding_arcsec=grid_padding_arcsec,
             output_shape=output_shape,
             origin=origin,
+            trace_provider=self.night._trace_provider,
         )
         if self.instrument is Instrument.LRS2:
             raw_result = workflows.run_lrs2_channel_quicklooks(
                 self.raw_exposure,
-                allow_partial=True,
                 **common,
             )
         else:
@@ -438,14 +456,6 @@ class QuicklookIFU:
     def amplifier_products(self):
         return self.raw_result.amplifier_products
 
-    @property
-    def missing_amplifiers(self) -> tuple[str, ...]:
-        return self.raw_result.missing_amplifiers
-
-    @property
-    def processing_failures(self):
-        return self.raw_result.processing_failures
-
     def plot(
         self,
         *,
@@ -479,8 +489,6 @@ class QuicklookProduct:
     channels: Mapping[str, Any] = field(default_factory=dict)
     ifus: Mapping[str, QuicklookIFU] = field(default_factory=dict)
     amplifier_evidence: Mapping[str, Any] = field(default_factory=dict)
-    missing_amplifiers: tuple[str, ...] = ()
-    processing_failures: Mapping[str, str] = field(default_factory=dict)
 
     @classmethod
     def from_result(
@@ -497,23 +505,11 @@ class QuicklookProduct:
                 raw_result=result,
                 channels=result.channels,
                 amplifier_evidence=result.amplifier_evidence,
-                missing_amplifiers=result.missing_amplifiers,
-                processing_failures=result.processing_failures,
             )
         if isinstance(result, workflows.VIRUSQuicklookSet):
             ifus = {
                 slot: QuicklookIFU(ifu_result)
                 for slot, ifu_result in result.ifus.items()
-            }
-            missing = tuple(
-                token
-                for ifu in ifus.values()
-                for token in ifu.missing_amplifiers
-            )
-            failures = {
-                token: message
-                for ifu in ifus.values()
-                for token, message in ifu.processing_failures.items()
             }
             return cls(
                 exposure=exposure,
@@ -522,8 +518,6 @@ class QuicklookProduct:
                 raw_result=result,
                 ifus=ifus,
                 amplifier_evidence=result.amplifier_evidence,
-                missing_amplifiers=missing,
-                processing_failures=failures,
             )
         raise TypeError(f"Unsupported quick-look result: {type(result).__name__}")
 
@@ -561,10 +555,7 @@ class QuicklookProduct:
                 show_centroid=show_centroid,
             )
         if not self.ifus:
-            raise ValueError(
-                "VIRUS quick look contains no processable IFU products; "
-                "inspect product.processing_failures and product.missing_amplifiers."
-            )
+            raise ValueError("VIRUS quick look contains no processable IFU products")
         if ifu is None:
             if len(self.ifus) != 1:
                 available = ", ".join(sorted(self.ifus))
