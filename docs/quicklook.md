@@ -50,6 +50,29 @@ The workflows do not read files or select observations. Those responsibilities
 belong to discovery and higher-level operational code, keeping the numerical
 contracts easy to test with arrays.
 
+## Workflow composition and plotting
+
+`build_amplifier_topology` is the explicit workflow boundary for one prepared
+detector and one resolved physical identity. It loads the dated trace
+reference, fits the shared dense trace map, attaches the authoritative fiber
+positions, and returns trace and resource provenance. It does not discover
+archives or load raw files.
+
+`run_lrs2_channel_quicklooks` is the thin archive-facing composition helper
+for an already discovered `Exposure`; it loads its raw members on demand. It
+runs the same independent amplifier path
+for the eight expected LRS2 amplifier tokens, retains each
+`LRS2AmplifierQuicklookEvidence` record, and returns an `LRS2QuicklookSet`
+containing both the amplifier products and the four complete channel
+products. It requires all eight requested frame members and reports missing
+members explicitly.
+
+The reusable Matplotlib functions in `hetquicklook.visualization` include
+`plot_spatial_image`, `plot_fiber_values`, and `plot_spatial_support`. They
+accept either an amplifier `SpatialQuicklook` or an `LRS2ChannelQuicklook`.
+The notebook keeps its four-panel layout as an exploratory presentation
+choice while using these package helpers for the individual evidence views.
+
 ## LRS2 channel products
 
 An LRS2 amplifier remains the detector-processing unit. The existing workflow
@@ -78,3 +101,13 @@ being represented as a complete 280-fiber channel. Standard-star channel
 centroids are recomputed from all 280 physical fibers using the existing
 weighted-centroid measurement and remain evidence without an automatic quality
 decision.
+
+The resulting hierarchy is:
+
+```text
+shared amplifier numerical pipeline
+        -> SpatialQuicklook per amplifier
+        -> LRS2 topology composition
+        -> LRS2ChannelQuicklook per channel
+        -> four-channel operator presentation
+```

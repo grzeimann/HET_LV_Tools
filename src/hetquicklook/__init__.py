@@ -52,14 +52,19 @@ from .topology import (
     virus_orientation,
 )
 from .workflows import (
+    AmplifierTopologyResult,
+    LRS2AmplifierQuicklookEvidence,
     LRS2ChannelQuicklook,
+    LRS2QuicklookSet,
     INSTRUMENT_SPATIAL_DEFAULTS,
     LRS2_SPATIAL_DEFAULTS,
     LRS2_STANDARD_FIDUCIAL,
     VIRUS_SPATIAL_DEFAULTS,
     VIRUS_STANDARD_FIDUCIAL,
+    build_amplifier_topology,
     combine_lrs2_channel_products,
     combine_lrs2_channels,
+    run_lrs2_channel_quicklooks,
     spatial_defaults_for,
 )
 
@@ -116,8 +121,13 @@ __all__ = [
     "LRS2_SPATIAL_DEFAULTS",
     "INSTRUMENT_SPATIAL_DEFAULTS",
     "LRS2ChannelQuicklook",
+    "LRS2AmplifierQuicklookEvidence",
+    "LRS2QuicklookSet",
+    "AmplifierTopologyResult",
+    "build_amplifier_topology",
     "combine_lrs2_channel_products",
     "combine_lrs2_channels",
+    "run_lrs2_channel_quicklooks",
     "spatial_defaults_for",
 ]
 

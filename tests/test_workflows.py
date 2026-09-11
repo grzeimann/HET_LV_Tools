@@ -1,8 +1,19 @@
+from datetime import date
+from pathlib import Path
+
 import numpy as np
 import pytest
 
+import hetquicklook.workflows as workflows
+from hetquicklook.discovery import ArchiveMember, RawFrameIdentity
 from hetquicklook.fibers import FiberTopology
+from hetquicklook.instrument import Instrument, PhysicalAmplifierIdentity
+from hetquicklook.metadata import ExposureMetadata
+from hetquicklook.observation import Exposure
+from hetquicklook.raw import RawFrameData
+from hetquicklook.topology import TopologyReference
 from hetquicklook.workflows import (
+    AmplifierTopologyResult,
     LRS2ChannelQuicklook,
     LRS2_SPATIAL_DEFAULTS,
     PointingQuicklook,
@@ -11,8 +22,11 @@ from hetquicklook.workflows import (
     combine_lrs2_channel_products,
     combine_lrs2_channels,
     run_ldls_flat_quicklook,
+    run_lrs2_channel_quicklooks,
     run_standard_star_quicklook,
+    build_amplifier_topology,
 )
+from hetquicklook.algorithms.results import AlgorithmResult
 from hetquicklook.algorithms.centroid import Centroid
 
 
@@ -261,3 +275,181 @@ def test_lrs2_channel_set_does_not_silently_create_partial_products() -> None:
 
     with pytest.raises(ValueError, match="missing amplifier"):
         combine_lrs2_channels(products)
+
+
+@pytest.mark.parametrize(
+    ("instrument", "nfiber"),
+    ((Instrument.VIRUS, 112), (Instrument.LRS2, 140)),
+)
+def test_build_amplifier_topology_uses_trace_count_for_both_instruments(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    instrument: Instrument,
+    nfiber: int,
+) -> None:
+    identity = PhysicalAmplifierIdentity(
+        instrument=instrument,
+        ifu_slot="001" if instrument is Instrument.VIRUS else "056",
+        amplifier="LL",
+        ifuid="001" if instrument is Instrument.VIRUS else "7001",
+        specid="412" if instrument is Instrument.VIRUS else "503",
+        controller="controller",
+    )
+    reference_path = tmp_path / "fiber_loc.txt"
+    trace_reference = np.column_stack((np.arange(nfiber), np.zeros(nfiber)))
+    monkeypatch.setattr(
+        workflows.VirusTopologyLoader,
+        "resolve_trace_reference",
+        lambda self, resolved_identity, at=None: (
+            trace_reference,
+            TopologyReference("trace", reference_path),
+        ),
+    )
+    monkeypatch.setattr(
+        workflows,
+        "fit_fiber_traces",
+        lambda image, reference, **kwargs: AlgorithmResult(
+            "trace",
+            "test",
+            {"fiber_trace_map": np.zeros((nfiber, image.shape[1]))},
+            {},
+        ),
+    )
+
+    result = build_amplifier_topology(
+        np.zeros((4, 6)), identity, trace_root=tmp_path, at=date(2026, 1, 1)
+    )
+
+    assert len(result.topology.fiber_ids) == nfiber
+    assert result.trace_result.get_array("fiber_trace_map").shape == (nfiber, 6)
+    assert result.trace_provenance.path == reference_path
+    assert result.position_provenance.path.name
+
+
+def test_build_amplifier_topology_preserves_trace_hardware_exception(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    identity = PhysicalAmplifierIdentity(
+        instrument=Instrument.VIRUS,
+        ifu_slot="018",
+        amplifier="RU",
+        ifuid="018",
+        specid="504",
+        controller="controller",
+    )
+    trace_reference = np.column_stack((np.arange(111), np.zeros(111)))
+    monkeypatch.setattr(
+        workflows.VirusTopologyLoader,
+        "resolve_trace_reference",
+        lambda self, resolved_identity, at=None: (
+            trace_reference,
+            TopologyReference("trace", tmp_path / "fiber_loc.txt"),
+        ),
+    )
+    monkeypatch.setattr(
+        workflows,
+        "fit_fiber_traces",
+        lambda image, reference, **kwargs: AlgorithmResult(
+            "trace",
+            "test",
+            {"fiber_trace_map": np.zeros((111, image.shape[1]))},
+            {},
+        ),
+    )
+
+    result = build_amplifier_topology(
+        np.zeros((4, 6)), identity, trace_root=tmp_path
+    )
+
+    assert len(result.topology.fiber_ids) == 111
+
+
+def test_lrs2_batch_workflow_retains_amplifier_evidence_and_channels(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tokens = (
+        "056LL", "056LU", "056RL", "056RU",
+        "066LL", "066LU", "066RL", "066RU",
+    )
+    frames = []
+    identities = {}
+    for token in tokens:
+        identity = RawFrameIdentity("exp001", token, "twi")
+        member = ArchiveMember(
+            archive_path=tmp_path / "lrs2.tar",
+            member_name=f"exp001_{token}_twi.fits",
+            size=1,
+            identity=identity,
+        )
+        frames.append(member)
+        identities[member.member_name] = PhysicalAmplifierIdentity(
+            instrument=Instrument.LRS2,
+            ifu_slot=identity.ifu_slot,
+            amplifier=identity.amplifier,
+            ifuid="7001" if identity.ifu_slot == "056" else "7002",
+            specid="503" if identity.ifu_slot == "056" else "502",
+            controller="controller",
+        )
+    exposure = Exposure(
+        exposure_id="exp001",
+        frames=tuple(frames),
+        metadata=ExposureMetadata(
+            exposure_id="exp001", frame_types=("twi",), frame_class="calibration"
+        ),
+        classification=None,  # type: ignore[arg-type]
+        physical_identities=identities,
+    )
+
+    class Loader:
+        def load(self, member):
+            return RawFrameData(
+                data=np.zeros((2, 2)),
+                header={},
+                path=str(member.archive_path),
+                tar_member=member.member_name,
+                identity=member.identity,
+            )
+
+    detector = AlgorithmResult(
+        "detector", "test", {
+            "oriented_detector_image": np.zeros((2, 2)),
+            "detector_variance": np.ones((2, 2)),
+        }, {},
+    )
+    monkeypatch.setattr(workflows, "reduce_amplifier_array", lambda data, header: detector)
+
+    def fake_topology(prepared_detector, physical_identity, **kwargs):
+        topology = FiberTopology.from_arrays(
+            physical_identity.amplifier,
+            ("fiber",),
+            np.array([[0.0]]),
+            np.array([[0.0]]),
+            np.array([0.0]),
+            np.array([0.0]),
+        )
+        return AmplifierTopologyResult(
+            topology=topology,
+            trace_result=AlgorithmResult("trace", "test", {}, {}),
+            physical_identity=physical_identity,
+            trace_provenance=TopologyReference("trace", tmp_path / "trace"),
+            position_provenance=TopologyReference("positions", tmp_path / "positions"),
+        )
+
+    monkeypatch.setattr(workflows, "build_amplifier_topology", fake_topology)
+    calls = []
+
+    def fake_flat(prepared_detector, topology, **kwargs):
+        calls.append(topology.amplifier)
+        return _lrs2_amplifier_product(topology.amplifier, value=1.0)
+
+    monkeypatch.setattr(workflows, "run_ldls_flat_quicklook", fake_flat)
+
+    result = run_lrs2_channel_quicklooks(
+        exposure, trace_root=tmp_path, frame_type="twi", loader=Loader()
+    )
+
+    assert tuple(result.channels) == ("UV", "Orange", "Red", "Far-Red")
+    assert len(result.amplifier_evidence) == 8
+    assert set(result.amplifier_products) == set(tokens)
+    assert all(channel.fiber_values.shape == (280,) for channel in result.channels.values())
+    assert len(calls) == 8

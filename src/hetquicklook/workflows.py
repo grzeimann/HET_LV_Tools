@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Mapping
+from datetime import date, datetime
+from pathlib import Path
+from typing import TYPE_CHECKING, Mapping
 
 import numpy as np
 
@@ -16,13 +18,24 @@ from .algorithms.collapse import (
     spatial_image_from_fiber_values,
 )
 from .algorithms.extraction import extract_fractional_aperture
+from .algorithms.detector import reduce_amplifier_array
+from .algorithms.results import AlgorithmResult
 from .algorithms.spatial import gaussian_splat
+from .algorithms.trace import fit_fiber_traces
 from .fibers import FiberTopology
 from .instrument import (
     Instrument,
+    PhysicalAmplifierIdentity,
     lrs2_amplifier_tokens_for_channel,
+    lrs2_channel_for,
     lrs2_component_for_channel,
 )
+from .topology import LRS2FiberPositionLoader, TopologyReference, VirusTopologyLoader
+
+if TYPE_CHECKING:
+    from .discovery import ArchiveMember
+    from .observation import Exposure
+    from .raw import RawFrameData, RawFrameLoader
 
 
 VIRUS_SPATIAL_DEFAULTS = {
@@ -146,6 +159,45 @@ class LRS2ChannelQuicklook:
             self.measured_centroid.x - self.intended_fiducial[0],
             self.measured_centroid.y - self.intended_fiducial[1],
         )
+
+
+@dataclass(frozen=True)
+class AmplifierTopologyResult:
+    """Trace and physical-fiber topology prepared for one amplifier."""
+
+    topology: FiberTopology
+    trace_result: AlgorithmResult
+    physical_identity: PhysicalAmplifierIdentity
+    trace_provenance: TopologyReference
+    position_provenance: TopologyReference
+
+
+@dataclass(frozen=True)
+class LRS2AmplifierQuicklookEvidence:
+    """All evidence retained while building one LRS2 amplifier product."""
+
+    frame: "ArchiveMember"
+    loaded: "RawFrameData"
+    detector: AlgorithmResult
+    topology: AmplifierTopologyResult
+    product: SpatialQuicklook
+
+
+@dataclass(frozen=True)
+class LRS2QuicklookSet:
+    """Amplifier evidence and complete channel products for one exposure."""
+
+    amplifier_evidence: Mapping[str, LRS2AmplifierQuicklookEvidence]
+    channels: Mapping[str, LRS2ChannelQuicklook]
+
+    @property
+    def amplifier_products(self) -> dict[str, SpatialQuicklook]:
+        """Return the independently generated amplifier products by token."""
+
+        return {
+            token: evidence.product
+            for token, evidence in self.amplifier_evidence.items()
+        }
 
 
 def _dense_trace_map(topology: FiberTopology, detector_columns: int) -> np.ndarray:
@@ -474,6 +526,244 @@ def run_standard_star_quicklook(
         effective_aperture_width=spatial.effective_aperture_width,
         extraction_valid=spatial.extraction_valid,
     )
+
+
+def build_amplifier_topology(
+    prepared_detector: np.ndarray,
+    physical_identity: PhysicalAmplifierIdentity,
+    *,
+    trace_root: str | Path,
+    at: date | datetime | str | None = None,
+    resource_root: str | Path | None = None,
+) -> AmplifierTopologyResult:
+    """Build trace and physical-fiber topology for one prepared amplifier.
+
+    This is the workflow boundary between detector preparation and the
+    in-memory quick-look algorithms.  It accepts a prepared detector array
+    and an already resolved physical identity; archive discovery and raw-file
+    loading remain outside this function.
+    """
+
+    image = np.asarray(prepared_detector, dtype=float)
+    if image.ndim != 2:
+        raise ValueError("prepared_detector must be a two-dimensional array")
+    identity = PhysicalAmplifierIdentity(
+        instrument=Instrument.from_value(physical_identity.instrument),
+        ifu_slot=str(physical_identity.ifu_slot).strip().zfill(3),
+        amplifier=str(physical_identity.amplifier).strip().upper(),
+        ifuid=(
+            None
+            if physical_identity.ifuid is None
+            else str(physical_identity.ifuid).strip()
+        ),
+        specid=(
+            None
+            if physical_identity.specid is None
+            else str(physical_identity.specid).strip()
+        ),
+        controller=physical_identity.controller,
+    )
+    trace_loader = VirusTopologyLoader(trace_root=trace_root)
+    trace_reference, trace_provenance = trace_loader.resolve_trace_reference(
+        identity, at=at
+    )
+    trace_result = fit_fiber_traces(
+        image,
+        trace_reference,
+        specid=identity.specid,
+        ifuid=identity.ifuid,
+        amplifier=identity.amplifier,
+    )
+    trace_map = trace_result.get_array("fiber_trace_map")
+
+    if identity.instrument is Instrument.LRS2:
+        channel = lrs2_channel_for(identity.ifu_slot, identity.amplifier)
+        if channel is None:
+            raise ValueError(
+                f"No authoritative LRS2 channel for {identity.ifu_slot}"
+                f"{identity.amplifier}"
+            )
+        positions, position_provenance = LRS2FiberPositionLoader(
+            resource_root=resource_root
+        ).fiber_positions(channel, identity.amplifier)
+    else:
+        if identity.ifuid is None:
+            raise ValueError("VIRUS topology requires IFUID")
+        positions, position_provenance = trace_loader.fiber_positions(
+            identity.ifuid, identity.amplifier
+        )
+
+    # This is the established hardware exception in the supplied trace
+    # algorithm.  The trace result has one fewer row while the position table
+    # still contains the reference row, which is removed here to preserve the
+    # detector-to-position correspondence.
+    if positions.shape[0] != trace_map.shape[0]:
+        special_case = (
+            str(identity.specid).zfill(3) == "504"
+            and str(identity.ifuid).zfill(3) == "018"
+            and identity.amplifier == "RU"
+        )
+        if not special_case or positions.shape[0] != trace_map.shape[0] + 1:
+            raise ValueError("Trace and position fiber counts do not match")
+        positions = positions[:-1]
+
+    nfiber, ncolumn = trace_map.shape
+    fiber_ids = tuple(
+        f"{identity.ifu_slot}{identity.amplifier}-{index:03d}"
+        for index in range(nfiber)
+    )
+    detector_x = np.tile(np.arange(ncolumn, dtype=float), (nfiber, 1))
+    topology = FiberTopology.from_arrays(
+        identity.amplifier,
+        fiber_ids,
+        detector_x,
+        trace_map,
+        positions[:, 0],
+        positions[:, 1],
+    )
+    return AmplifierTopologyResult(
+        topology=topology,
+        trace_result=trace_result,
+        physical_identity=identity,
+        trace_provenance=trace_provenance,
+        position_provenance=position_provenance,
+    )
+
+
+def run_lrs2_channel_quicklooks(
+    exposure: "Exposure",
+    *,
+    trace_root: str | Path,
+    at: date | datetime | str | None = None,
+    frame_type: str | None = None,
+    quicklook_kind: str = "flat",
+    loader: "RawFrameLoader | None" = None,
+    resource_root: str | Path | None = None,
+    requested_position: tuple[float, float] | None = None,
+    detector_extraction_width: float = 5.0,
+    collapse_columns: int = DEFAULT_COLLAPSE_COLUMNS,
+    collapse_statistic: str = DEFAULT_COLLAPSE_STATISTIC,
+    gaussian_fwhm_arcsec: float | None = None,
+    pixel_scale_arcsec: float | None = None,
+    output_shape: tuple[int, int] | None = None,
+    origin: tuple[float, float] | None = None,
+) -> LRS2QuicklookSet:
+    """Run the established amplifier path and compose all four LRS2 channels.
+
+    Each expected amplifier is loaded, reduced, traced, extracted, and
+    collapsed independently.  Composition happens only through the existing
+    physical-fiber/value boundary in :func:`combine_lrs2_channels`.
+
+    The helper requires the complete eight-amplifier set for the requested
+    frame type.  Missing data are reported instead of being represented by a
+    partial channel result.
+    """
+
+    exposure_instruments = {
+        Instrument.from_value(identity.instrument)
+        for identity in exposure.physical_identities.values()
+    }
+    if exposure_instruments != {Instrument.LRS2}:
+        raise ValueError("run_lrs2_channel_quicklooks requires an LRS2 exposure")
+    kind = str(quicklook_kind).strip().casefold()
+    if kind not in {"flat", "standard"}:
+        raise ValueError("quicklook_kind must be 'flat' or 'standard'")
+
+    if frame_type is None:
+        frame_type = exposure.metadata.frame_type
+    if frame_type is None:
+        raise ValueError(
+            "frame_type is required when the exposure contains multiple frame types"
+        )
+    requested_frame_type = str(frame_type).strip().casefold()
+    expected_tokens = tuple(
+        token
+        for channel in ("UV", "Orange", "Red", "Far-Red")
+        for token in lrs2_amplifier_tokens_for_channel(channel)
+    )
+    frames_by_token: dict[str, ArchiveMember] = {}
+    for frame in exposure.frames:
+        identity = frame.identity
+        if identity is None:
+            continue
+        token = str(identity.amplifier_token).strip().upper()
+        if token not in expected_tokens:
+            continue
+        if str(identity.frame_type).strip().casefold() != requested_frame_type:
+            continue
+        if token in frames_by_token:
+            raise ValueError(
+                f"Multiple {frame_type} frames found for LRS2 amplifier {token}"
+            )
+        frames_by_token[token] = frame
+
+    missing = [token for token in expected_tokens if token not in frames_by_token]
+    if missing:
+        raise ValueError(
+            "Cannot create complete LRS2 channel products; missing amplifier "
+            f"frame(s): {', '.join(missing)}"
+        )
+
+    active_loader = loader
+    evidence: dict[str, LRS2AmplifierQuicklookEvidence] = {}
+    for token in expected_tokens:
+        frame = frames_by_token[token]
+        loaded = exposure.load_frame(frame, loader=active_loader)
+        detector = reduce_amplifier_array(loaded.data, dict(loaded.header))
+        topology_result = build_amplifier_topology(
+            detector.get_array("oriented_detector_image"),
+            exposure.identity_for(frame),
+            trace_root=trace_root,
+            at=at,
+            resource_root=resource_root,
+        )
+        prepared_detector = detector.get_array("oriented_detector_image")
+        detector_variance = detector.get_array("detector_variance")
+        if kind == "flat":
+            product = run_ldls_flat_quicklook(
+                prepared_detector,
+                topology_result.topology,
+                detector_variance=detector_variance,
+                extraction_width=detector_extraction_width,
+                collapse_columns=collapse_columns,
+                statistic=collapse_statistic,
+                gaussian_fwhm=gaussian_fwhm_arcsec,
+                pixel_scale=pixel_scale_arcsec,
+                instrument=Instrument.LRS2,
+                output_shape=output_shape,
+                origin=origin,
+            )
+        else:
+            product = run_standard_star_quicklook(
+                prepared_detector,
+                topology_result.topology,
+                requested_position=requested_position,
+                detector_variance=detector_variance,
+                extraction_width=detector_extraction_width,
+                collapse_columns=collapse_columns,
+                statistic=collapse_statistic,
+                gaussian_fwhm=gaussian_fwhm_arcsec,
+                pixel_scale=pixel_scale_arcsec,
+                instrument=Instrument.LRS2,
+                output_shape=output_shape,
+                origin=origin,
+            )
+        evidence[token] = LRS2AmplifierQuicklookEvidence(
+            frame=frame,
+            loaded=loaded,
+            detector=detector,
+            topology=topology_result,
+            product=product,
+        )
+
+    channels = combine_lrs2_channels(
+        {token: item.product for token, item in evidence.items()},
+        gaussian_fwhm_arcsec=gaussian_fwhm_arcsec,
+        pixel_scale_arcsec=pixel_scale_arcsec,
+        output_shape=output_shape,
+        origin=origin,
+    )
+    return LRS2QuicklookSet(amplifier_evidence=evidence, channels=channels)
 
 
 def _canonical_lrs2_channel_products(

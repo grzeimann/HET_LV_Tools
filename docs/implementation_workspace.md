@@ -220,6 +220,15 @@ products the centroid is recomputed from all 280 channel fibers, rather than
 averaging amplifier centroids, and the intended `(0, 0)` fiducial remains
 display evidence without a quality threshold.
 
+The workflow layer also exposes `build_amplifier_topology` for the explicit
+prepared-detector/physical-identity boundary and
+`run_lrs2_channel_quicklooks` for composing an already discovered LRS2
+exposure, loading its raw members on demand. The latter retains an
+`LRS2AmplifierQuicklookEvidence` record
+for each of the eight amplifier products as well as the four channel products.
+Reusable result plotting lives in `hetquicklook.visualization`; the notebook's
+four-panel arrangement remains an exploratory presentation choice.
+
 The quick-look product is an evidence supply for an observer. It does not emit
 automated warnings, rejection decisions, or quality grades. An observer can
 inspect blocked or dim fibers, illumination structure, missing components,
@@ -244,7 +253,10 @@ including LRS2 channel composition. The existing weighted centroid is
 available as a simple measured location; a more specialized estimator can be
 evaluated later if visualization experience shows that it is needed. The next
 implementation layer is assembling archive selection, metadata, plotting, and
-output around the evidence already exposed by the array workflows.
+output around the evidence already exposed by the array workflows. The first
+workflow and plotting helpers now provide the amplifier topology boundary,
+complete LRS2 exposure composition, and reusable individual-result views; the
+interactive notebook remains the place for presentation experiments.
 
 Quality policy remains deliberately outside the core requirement. The open
 product question is which evidence should be arranged most clearly for an
