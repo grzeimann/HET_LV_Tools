@@ -8,6 +8,7 @@ from typing import Any
 import numpy as np
 
 from .fibers import FiberTopology
+from .topology import VirusTopologyLoader
 from .workflows import LRS2ChannelQuicklook, PointingQuicklook, SpatialQuicklook
 
 
@@ -356,6 +357,126 @@ def plot_virus_ifu_amplifiers(
             show_fiducial=show_fiducial,
             show_centroid=show_centroid,
             colorbar=True,
+        )
+    if title:
+        fig.suptitle(title)
+    return fig
+
+
+def plot_virus_ifu_grid(
+    ifu_products: Mapping[str, SpatialQuicklook],
+    *,
+    title: str | None = None,
+    percentiles: tuple[float, float] = (2.0, 98.0),
+    show_fibers: bool = True,
+    show_fiducial: bool = False,
+    show_centroid: bool = False,
+) -> Any:
+    """Render VIRUS IFU images in the authoritative focal-plane layout."""
+
+    import matplotlib.pyplot as plt
+
+    if not ifu_products:
+        raise ValueError("ifu_products must contain at least one IFU")
+    focal_plane, _ = VirusTopologyLoader().resolve_fplane()
+    products = {
+        str(slot).strip().zfill(3): product
+        for slot, product in ifu_products.items()
+    }
+    unknown = sorted(set(products) - set(focal_plane))
+    if unknown:
+        raise ValueError(
+            "VIRUS IFU products have no focal-plane positions: "
+            + ", ".join(unknown)
+        )
+
+    positions = {
+        slot: (float(position[0]), float(position[1]))
+        for slot, position in focal_plane.items()
+        if slot != "000"
+    }
+    x_coordinates = sorted({position[0] for position in positions.values()})
+    y_coordinates = sorted(
+        {position[1] for position in positions.values()}, reverse=True
+    )
+    slot_by_position = {position: slot for slot, position in positions.items()}
+
+    image_values = [
+        np.asarray(product.image, dtype=float).ravel()
+        for product in products.values()
+    ]
+    vmin, vmax = finite_limits(np.concatenate(image_values), percentiles)
+    fig, axes = plt.subplots(
+        len(y_coordinates),
+        len(x_coordinates),
+        figsize=(16, 16),
+        squeeze=False,
+    )
+    fig.subplots_adjust(left=0.03, right=0.97, bottom=0.03, top=0.95, wspace=0.02, hspace=0.02)
+    artist = None
+    for row_index, y_coordinate in enumerate(y_coordinates):
+        for column_index, x_coordinate in enumerate(x_coordinates):
+            ax = axes[row_index, column_index]
+            slot = slot_by_position.get((x_coordinate, y_coordinate))
+            ax.set_xticks([])
+            ax.set_yticks([])
+            if slot is None:
+                ax.set_axis_off()
+                continue
+            ax.set_title(slot, fontsize="small", pad=2)
+            product = products.get(slot)
+            if product is None:
+                ax.text(
+                    0.5,
+                    0.5,
+                    "unavailable",
+                    ha="center",
+                    va="center",
+                    transform=ax.transAxes,
+                    fontsize="x-small",
+                )
+                ax.set_facecolor("0.85")
+                continue
+
+            image = np.asarray(product.image, dtype=float)
+            kwargs: dict[str, Any] = {
+                "origin": "lower",
+                "aspect": "equal",
+                "interpolation": "nearest",
+            }
+            extent = _image_extent(product)
+            if extent is not None:
+                kwargs["extent"] = extent
+            if vmin is not None:
+                kwargs.update(vmin=vmin, vmax=vmax)
+            artist = ax.imshow(image, **kwargs)
+
+            if show_fibers:
+                fiber_positions = fiber_position_array(product)
+                if fiber_positions.size:
+                    ax.scatter(
+                        fiber_positions[:, 0],
+                        fiber_positions[:, 1],
+                        facecolors="none",
+                        edgecolors="white",
+                        s=3,
+                        linewidths=0.25,
+                    )
+            if show_fiducial and product.intended_fiducial is not None:
+                fx, fy = product.intended_fiducial
+                ax.scatter([fx], [fy], marker="x", s=30, linewidths=1.0)
+            if show_centroid and product.measured_centroid is not None:
+                cx, cy = product.measured_centroid.x, product.measured_centroid.y
+                if np.all(np.isfinite([cx, cy])):
+                    ax.scatter([cx], [cy], marker="+", s=40, linewidths=1.0)
+
+    if artist is not None and vmin is not None:
+        fig.colorbar(
+            artist,
+            ax=axes.ravel().tolist(),
+            fraction=0.02,
+            pad=0.01,
+            label="Collapsed quick-look signal",
         )
     if title:
         fig.suptitle(title)

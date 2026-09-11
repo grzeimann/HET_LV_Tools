@@ -10,6 +10,7 @@ from hetquicklook.visualization import (
     finite_limits,
     grid_extent,
     plot_lrs2_channels,
+    plot_virus_ifu_grid,
     plot_fiber_values,
     plot_spatial_image,
     plot_spatial_support,
@@ -79,3 +80,22 @@ def test_lrs2_channel_layout_keeps_missing_panels_visible() -> None:
 
     assert len(figure.axes) >= 4
     assert any("Orange (missing)" in axis.get_title() for axis in figure.axes)
+
+
+def test_virus_ifu_grid_uses_focal_plane_slots() -> None:
+    products = {
+        slot: SpatialQuicklook(
+            fiber_values={"fiber": 1.0},
+            fiber_positions={"fiber": (0.0, 0.0)},
+            image=np.ones((2, 2)),
+            spatial_x_coordinates=np.array([-0.5, 0.5]),
+            spatial_y_coordinates=np.array([-0.5, 0.5]),
+        )
+        for slot in ("074", "075")
+    }
+
+    figure = plot_virus_ifu_grid(products, show_fibers=False)
+
+    image_axes = [axis for axis in figure.axes if axis.get_title() in {"074", "075"}]
+    assert len(image_axes) == 2
+    assert len(figure.axes) >= 100

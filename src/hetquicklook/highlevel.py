@@ -35,6 +35,7 @@ _TABLE_COLUMNS = (
     "Program",
     "Amplifiers/components",
 )
+_TABLE_SEQUENCE_LIMIT = 8
 
 
 def _package_trace_root() -> Path:
@@ -47,7 +48,7 @@ def _package_trace_root() -> Path:
     return Path(__file__).resolve().parents[2]
 
 
-def _display_value(value: Any) -> str:
+def _display_value(value: Any, *, max_items: int | None = None) -> str:
     """Convert metadata to a compact, safe table value."""
 
     if value is None:
@@ -60,6 +61,9 @@ def _display_value(value: Any) -> str:
         return value.isoformat()
     if isinstance(value, (tuple, list, set, frozenset)):
         values = tuple(_display_value(item) for item in value)
+        if max_items is not None and len(values) > max_items:
+            shown = ", ".join(values[:max_items])
+            return f"{shown}, … (+{len(values) - max_items} more)"
         return ", ".join(values) if values else "—"
     return str(value)
 
@@ -288,11 +292,19 @@ class QuicklookNight:
         )
         body: list[str] = []
         for row in self._rows():
-            cells = "".join(
-                "<td style='border:1px solid #bbb;padding:4px 6px'>"
-                f"{escape(_display_value(row[column]))}</td>"
-                for column in _TABLE_COLUMNS
-            )
+            cells_list: list[str] = []
+            for column in _TABLE_COLUMNS:
+                max_items = (
+                    _TABLE_SEQUENCE_LIMIT
+                    if column in {"IFU slot", "Amplifiers/components"}
+                    else None
+                )
+                display_value = _display_value(row[column], max_items=max_items)
+                cells_list.append(
+                    "<td style='border:1px solid #bbb;padding:4px 6px'>"
+                    f"{escape(display_value)}</td>"
+                )
+            cells = "".join(cells_list)
             body.append(f"<tr>{cells}</tr>")
         if not body:
             body.append(
@@ -617,13 +629,23 @@ class QuicklookProduct:
         if not self.ifus:
             raise ValueError("VIRUS quick look contains no processable IFU products")
         if ifu is None:
-            if len(self.ifus) != 1:
-                available = ", ".join(sorted(self.ifus))
-                raise ValueError(
-                    "VIRUS exposure contains multiple IFUs; select one with "
-                    f"product.plot(ifu=...) (available: {available})"
-                )
-            selected = next(iter(self.ifus.values()))
+            from .visualization import plot_virus_ifu_grid
+
+            products = {
+                slot: item.raw_result.product
+                for slot, item in self.ifus.items()
+                if item.raw_result.product is not None
+            }
+            if len(products) != len(self.ifus):
+                raise ValueError("VIRUS quick look contains an IFU without a spatial product")
+            return plot_virus_ifu_grid(
+                products,
+                title=title or f"VIRUS {self.kind} quick look",
+                percentiles=percentiles,
+                show_fibers=show_fibers,
+                show_fiducial=show_fiducial,
+                show_centroid=show_centroid,
+            )
         else:
             try:
                 selected = self.ifus[str(ifu).strip().zfill(3)]

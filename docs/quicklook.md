@@ -55,10 +55,10 @@ A channel is created only from its two required 140-fiber amplifier products.
 
 For VIRUS, `product.ifus` groups the complete four-amplifier evidence by
 physical IFU slot and composes one approximately 50-arcsecond IFU-plane image
-from all 448 fibers. No arbitrary IFU or amplifier is selected. If one IFU is
-present, `product.plot()` renders its combined image; with multiple IFUs,
-select one explicitly with `product.plot(ifu="074")`. The individual
-amplifier views remain available through
+from all 448 fibers. With no `ifu` argument, `product.plot()` renders the
+available IFU images in the authoritative 10-by-10 focal-plane layout, with
+each slot labelled in its physical position. Pass `ifu="074"` to render one
+IFU directly. The individual amplifier views remain available through
 `product.ifus["074"].plot_amplifiers()` when the quick look was run with
 `detailed_evidence=True`.
 
