@@ -42,6 +42,14 @@ each worker handles the four amplifiers and composes one IFU image. The
 resulting per-IFU diagnostics are available at
 `product.ifus["074"].diagnostics`.
 
+Archive-backed quick looks use the prepared detector's central 200-column
+window for flat, standard-star, and target exposures. Flats are traced from
+their own local window; standards and targets use the cached local trace from
+a suitable classified flat. Extraction is collapsed immediately, so the
+default product does not retain raw detector arrays or extracted spectra. Use
+`exposure.quicklook(detailed_evidence=True)` when detailed per-amplifier
+detector and extraction evidence is needed.
+
 For LRS2, successful `product.channels` contains the complete UV, Orange, Red,
 Far-Red channel set. Missing required amplifier files or processing failures
 raise a contextual `QuicklookError`; no partial scientific product is returned.
@@ -53,11 +61,14 @@ physical IFU slot and composes one approximately 50-arcsecond IFU-plane image
 from all 448 fibers. No arbitrary IFU or amplifier is selected. If one IFU is
 present, `product.plot()` renders its combined image; with multiple IFUs,
 select one explicitly with `product.plot(ifu="074")`. The individual
-amplifier views remain available through `product.ifus["074"].plot_amplifiers()`.
+amplifier views remain available through
+`product.ifus["074"].plot_amplifiers()` when the quick look was run with
+`detailed_evidence=True`.
 
 The high-level objects are orchestration and presentation wrappers. The
 lower-level numerical workflows remain useful when an expert needs direct
-control over a prepared detector array and `FiberTopology`.
+control over a prepared detector array and `FiberTopology`; their richer
+in-memory evidence options remain available for direct inspection.
 
 `QuicklookSite` resolves the repository's dated `Fiber_Locations` tree from
 the installed package location, so the notebook working directory does not
@@ -141,9 +152,10 @@ the lower-level helpers for individual evidence views.
 ## LRS2 channel products
 
 An LRS2 amplifier remains the detector-processing unit. The existing workflow
-returns one `SpatialQuicklook` per amplifier, retaining its detector, trace,
-extraction, variance, and collapse evidence. An LRS2 channel is the spatial
-quick-look unit formed from two independently processed amplifier products:
+returns one compact `SpatialQuicklook` per amplifier, retaining collapsed
+fiber values, physical positions, and local trace provenance. An LRS2 channel
+is the spatial quick-look unit formed from two independently processed
+amplifier products:
 
 | Channel | Amplifiers | Fibers |
 | --- | --- | ---: |

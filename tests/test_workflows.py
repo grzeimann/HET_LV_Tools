@@ -84,6 +84,33 @@ def _dense_topology() -> FiberTopology:
     )
 
 
+def test_compact_spatial_path_discards_extraction_and_skips_splat(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_splat(*args, **kwargs):
+        raise AssertionError("compact amplifier path must not spatially splat")
+
+    monkeypatch.setattr(workflows, "gaussian_splat", fail_splat)
+    result = workflows._spatial_quicklook(
+        np.ones((30, 220), dtype=float),
+        _dense_topology(),
+        detector_variance=np.ones((30, 220), dtype=float),
+        collapse_columns=200,
+        retain_extraction=False,
+        build_spatial=False,
+    )
+
+    assert result.image.shape == (0, 0)
+    assert len(result.fiber_values) == 3
+    assert result.extracted_spectra is None
+    assert result.extraction_variance is None
+    assert result.extraction_valid_fraction is None
+    assert result.effective_aperture_width is None
+    assert result.extraction_valid is None
+    assert result.spatial_support is None
+    assert result.spatial_weight is None
+
+
 def test_workflow_selects_instrument_spatial_defaults_and_pads_bounds() -> None:
     detector = np.ones((30, 220), dtype=float)
     virus = run_ldls_flat_quicklook(
@@ -420,11 +447,34 @@ def test_lrs2_batch_workflow_retains_amplifier_evidence_and_channels(
 
     detector = AlgorithmResult(
         "detector", "test", {
-            "oriented_detector_image": np.zeros((2, 2)),
-            "detector_variance": np.ones((2, 2)),
+            "oriented_detector_image": np.zeros((10, 220)),
+            "detector_variance": np.ones((10, 220)),
         }, {},
     )
     monkeypatch.setattr(workflows, "reduce_amplifier_array", lambda data, header: detector)
+    trace_reference = np.array([[5.0, 0.0]])
+    trace_calls = []
+    monkeypatch.setattr(
+        workflows.VirusTopologyLoader,
+        "resolve_trace_reference",
+        lambda self, resolved_identity, at=None: (
+            trace_reference,
+            TopologyReference("trace", tmp_path / "trace"),
+        ),
+    )
+    def fake_trace(image, reference, **kwargs):
+        trace_calls.append((image.shape, kwargs))
+        return AlgorithmResult(
+            "trace",
+            "test",
+            {
+                "fiber_trace_map": np.full((1, image.shape[1]), 5.0),
+                "trace_reference": reference,
+            },
+            {},
+        )
+
+    monkeypatch.setattr(workflows, "fit_fiber_traces", fake_trace)
 
     def fake_topology(prepared_detector, physical_identity, **kwargs):
         topology = FiberTopology.from_arrays(
@@ -445,9 +495,11 @@ def test_lrs2_batch_workflow_retains_amplifier_evidence_and_channels(
 
     monkeypatch.setattr(workflows, "build_amplifier_topology", fake_topology)
     calls = []
+    flat_kwargs = []
 
     def fake_flat(prepared_detector, topology, **kwargs):
         calls.append(topology.amplifier)
+        flat_kwargs.append(kwargs)
         return _lrs2_amplifier_product(topology.amplifier, value=1.0)
 
     monkeypatch.setattr(workflows, "run_ldls_flat_quicklook", fake_flat)
@@ -460,6 +512,16 @@ def test_lrs2_batch_workflow_retains_amplifier_evidence_and_channels(
     assert len(result.amplifier_evidence) == 8
     assert set(result.amplifier_products) == set(tokens)
     assert all(channel.fiber_values.shape == (280,) for channel in result.channels.values())
+    assert all(item.loaded is None for item in result.amplifier_evidence.values())
+    assert all(item.detector is None for item in result.amplifier_evidence.values())
+    assert all(item.product.extracted_spectra is None for item in result.amplifier_evidence.values())
+    assert len(trace_calls) == 8
+    assert all(shape == (10, 200) for shape, _ in trace_calls)
+    assert all(call["n_chunks"] == 5 for _, call in trace_calls)
+    assert all(call["degree"] == 1 for _, call in trace_calls)
+    assert all(call["detector_column_start"] == 10 for _, call in trace_calls)
+    assert all(not kwargs["retain_extraction"] for kwargs in flat_kwargs)
+    assert all(not kwargs["build_spatial"] for kwargs in flat_kwargs)
     assert len(calls) == 8
 
 

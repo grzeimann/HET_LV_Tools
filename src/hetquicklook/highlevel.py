@@ -9,6 +9,8 @@ from html import escape
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+
 from .algorithms.collapse import DEFAULT_COLLAPSE_COLUMNS, DEFAULT_COLLAPSE_STATISTIC
 from . import workflows
 from .classification import ExposureClassification, StandardStarCatalog
@@ -389,6 +391,7 @@ class QuicklookExposure:
         nworkers: int = 1,
         timing: bool = False,
         memory_check: bool = False,
+        detailed_evidence: bool = False,
     ) -> "QuicklookProduct":
         """Build a product using existing classification and workflows."""
 
@@ -421,6 +424,7 @@ class QuicklookExposure:
             output_shape=output_shape,
             origin=origin,
             trace_provider=self.night._trace_provider,
+            detailed_evidence=detailed_evidence,
         )
         if self.instrument is Instrument.LRS2:
             raw_result = workflows.run_lrs2_channel_quicklooks(
@@ -510,6 +514,15 @@ class QuicklookIFU:
         """Render the four amplifier images as a diagnostic evidence view."""
 
         from .visualization import plot_virus_ifu_amplifiers
+
+        if any(
+            np.asarray(product.image).size == 0
+            for product in self.amplifier_products.values()
+        ):
+            raise ValueError(
+                "amplifier images were not retained; rerun quicklook with "
+                "detailed_evidence=True"
+            )
 
         return plot_virus_ifu_amplifiers(
             self.amplifier_products,
