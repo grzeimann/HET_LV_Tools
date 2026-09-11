@@ -484,8 +484,14 @@ class QuicklookIFU:
         return self.raw_result.amplifier_products
 
     @property
+    def unavailable_amplifiers(self):
+        """Return present amplifiers that failed quick-look reduction."""
+
+        return self.raw_result.unavailable_amplifiers
+
+    @property
     def product(self) -> workflows.SpatialQuicklook:
-        """Return the single spatial image composed from all four amplifiers."""
+        """Return the spatial image composed from available amplifiers."""
 
         if self.raw_result.product is None:
             raise ValueError("VIRUS IFU result has no composed spatial product")

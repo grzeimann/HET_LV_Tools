@@ -666,6 +666,73 @@ def test_virus_archive_workflow_fails_on_incomplete_ifu(
         )
 
 
+def test_virus_archive_workflow_keeps_successful_amplifiers_when_one_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    frames = []
+    identities = {}
+    products = {}
+    for index, amplifier in enumerate(("LL", "LU", "RL", "RU")):
+        token = f"095{amplifier}"
+        identity = RawFrameIdentity("exp001", token, "twi")
+        member = ArchiveMember(
+            archive_path=tmp_path / "virus.tar",
+            member_name=f"exp001_{token}_twi.fits",
+            size=1,
+            identity=identity,
+        )
+        frames.append(member)
+        identities[member.member_name] = PhysicalAmplifierIdentity(
+            instrument=Instrument.VIRUS,
+            ifu_slot="095",
+            amplifier=amplifier,
+            ifuid="095",
+            specid="412",
+            controller="controller",
+        )
+        products[token] = SpatialQuicklook(
+            fiber_values={f"{token}-000": float(index + 1)},
+            fiber_positions={f"{token}-000": (float(index), 0.0)},
+            image=np.ones((2, 2)),
+            instrument=Instrument.VIRUS,
+        )
+    exposure = Exposure(
+        exposure_id="exp001",
+        frames=tuple(frames),
+        metadata=ExposureMetadata(
+            exposure_id="exp001", frame_types=("twi",), frame_class="calibration"
+        ),
+        classification=ExposureClassification(quicklook_kind="flat"),
+        physical_identities=identities,
+    )
+
+    def fake_run(_exposure, frame, **kwargs):
+        token = frame.identity.amplifier_token
+        if token == "095RU":
+            raise QuicklookError(
+                "Quick-look failed for exposure exp001, amplifier 095RU, "
+                "stage: quick-trace fitting or validation, reason: trace geometry"
+            )
+        return (object(), object(), object(), products[token])
+
+    monkeypatch.setattr(workflows, "_run_archive_amplifier_quicklook", fake_run)
+
+    result = workflows.run_virus_ifu_quicklooks(
+        exposure, trace_root=tmp_path, frame_type="twi"
+    )
+
+    ifu = result.ifus["095"]
+    assert ifu.product is not None
+    assert set(ifu.amplifier_evidence) == {"095LL", "095LU", "095RL"}
+    assert set(ifu.product.fiber_values) == {
+        "095LL-000",
+        "095LU-000",
+        "095RL-000",
+    }
+    assert set(ifu.unavailable_amplifiers) == {"095RU"}
+    assert "trace geometry" in ifu.unavailable_amplifiers["095RU"]
+
+
 def test_virus_workflow_composes_one_ifu_image_in_sorted_order(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -745,6 +812,7 @@ def test_virus_workflow_composes_one_ifu_image_in_sorted_order(
     ifu = result.ifus["074"]
     assert ifu.product is not None
     assert len(ifu.product.fiber_values) == 448
+    assert ifu.unavailable_amplifiers == {}
     assert ifu.product.image.shape[0] > 20
     assert ifu.product.image.shape[1] > 10
     assert ifu.diagnostics.retained_array_bytes > 0

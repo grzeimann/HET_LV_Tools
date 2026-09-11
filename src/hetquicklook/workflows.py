@@ -337,6 +337,7 @@ class VIRUSIFUQuicklookSet:
     amplifier_evidence: Mapping[str, AmplifierQuicklookEvidence]
     product: SpatialQuicklook | None = None
     diagnostics: QuicklookDiagnostics = field(default_factory=QuicklookDiagnostics)
+    unavailable_amplifiers: Mapping[str, str] = field(default_factory=dict)
 
     @property
     def amplifier_products(self) -> dict[str, SpatialQuicklook]:
@@ -1633,22 +1634,21 @@ def _compose_virus_ifu_quicklook(
     output_shape: tuple[int, int] | None,
     origin: tuple[float, float] | None,
 ) -> SpatialQuicklook:
-    """Build one IFU image from all four amplifier fiber products."""
+    """Build one IFU image from the available amplifier fiber products."""
 
     expected_tokens = tuple(f"{ifu_slot}{amp}" for amp in ("LL", "LU", "RL", "RU"))
-    missing = [token for token in expected_tokens if token not in amplifier_evidence]
-    if missing:
-        raise QuicklookError(
-            f"Cannot compose VIRUS IFU {ifu_slot}; missing amplifier product(s): "
-            f"{', '.join(missing)}"
-        )
+    available_tokens = tuple(
+        token for token in expected_tokens if token in amplifier_evidence
+    )
+    if not available_tokens:
+        raise QuicklookError(f"Cannot compose VIRUS IFU {ifu_slot}; no amplifier products")
 
     fiber_values: dict[str, float] = {}
     fiber_positions: dict[str, tuple[float, float]] = {}
     fiber_errors: dict[str, float] = {}
-    first_product = amplifier_evidence[expected_tokens[0]].product
+    first_product = amplifier_evidence[available_tokens[0]].product
     all_errors_available = True
-    for token in expected_tokens:
+    for token in available_tokens:
         product = amplifier_evidence[token].product
         for fiber_id, value in product.fiber_values.items():
             if fiber_id in fiber_values:
@@ -1858,11 +1858,17 @@ def run_virus_ifu_quicklooks(
             return _unpack_archive_quicklook_result(result)
 
         processed: dict[str, tuple[object, ...]] = {}
+        unavailable_amplifiers: dict[str, str] = {}
         for amplifier in expected_amplifiers:
-            processed[amplifier] = process_amplifier(amplifier)
+            try:
+                processed[amplifier] = process_amplifier(amplifier)
+            except QuicklookError as error:
+                unavailable_amplifiers[f"{slot}{amplifier}"] = str(error)
 
         evidence: dict[str, AmplifierQuicklookEvidence] = {}
         for amplifier in expected_amplifiers:
+            if amplifier not in processed:
+                continue
             loaded, detector, topology_result, product, diagnostics = processed[amplifier]
             token = f"{slot}{amplifier}"
             evidence[token] = AmplifierQuicklookEvidence(
@@ -1919,6 +1925,7 @@ def run_virus_ifu_quicklooks(
                 ifu_slot=slot,
                 amplifier_evidence=evidence,
                 product=product,
+                unavailable_amplifiers=unavailable_amplifiers,
                 diagnostics=diagnostics,
             ),
             diagnostics,

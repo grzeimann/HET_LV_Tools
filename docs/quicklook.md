@@ -53,9 +53,11 @@ raise a contextual `QuicklookError`; no partial scientific product is returned.
 The product retains `product.raw_result` and `product.amplifier_evidence`.
 A channel is created only from its two required 140-fiber amplifier products.
 
-For VIRUS, `product.ifus` groups the complete four-amplifier evidence by
-physical IFU slot and composes one approximately 50-arcsecond IFU-plane image
-from all 448 fibers. With no `ifu` argument, `product.plot()` renders the
+For VIRUS, `product.ifus` groups amplifier evidence by physical IFU slot and
+composes one approximately 50-arcsecond IFU-plane image from the available
+fibers. A present amplifier that fails quick-look reduction is available in
+`product.ifus["095"].unavailable_amplifiers` with its failure reason; missing
+raw amplifier files remain hard errors. With no `ifu` argument, `product.plot()` renders the
 available IFU images in the authoritative 10-by-10 focal-plane layout, with
 each slot labelled in its physical position. Pass `ifu="074"` to render one
 IFU directly. The individual amplifier views remain available through
