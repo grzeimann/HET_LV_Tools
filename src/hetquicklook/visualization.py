@@ -31,6 +31,25 @@ def finite_limits(
     return float(lo), float(hi)
 
 
+def _display_limits(
+    values: np.ndarray,
+    percentiles: tuple[float, float],
+    vmin: float | None,
+    vmax: float | None,
+) -> tuple[float | None, float | None]:
+    """Resolve explicit display limits over the percentile defaults."""
+
+    percentile_min, percentile_max = finite_limits(values, percentiles)
+    resolved_min = percentile_min if vmin is None else float(vmin)
+    resolved_max = percentile_max if vmax is None else float(vmax)
+    if resolved_min is not None and resolved_max is not None:
+        if not np.isfinite(resolved_min) or not np.isfinite(resolved_max):
+            raise ValueError("vmin and vmax must be finite")
+        if resolved_min > resolved_max:
+            raise ValueError("vmin must be less than or equal to vmax")
+    return resolved_min, resolved_max
+
+
 def grid_extent(
     x_coordinates: np.ndarray,
     y_coordinates: np.ndarray,
@@ -123,14 +142,19 @@ def _plot_spatial_result(
     show_fiducial: bool,
     show_centroid: bool,
     colorbar: bool,
+    cmap: Any = None,
+    vmin: float | None = None,
+    vmax: float | None = None,
 ) -> Any:
     image = np.asarray(result.image, dtype=float)
-    vmin, vmax = finite_limits(image, percentiles)
+    vmin, vmax = _display_limits(image, percentiles, vmin, vmax)
     kwargs: dict[str, Any] = {
         "origin": "lower",
         "aspect": "equal",
         "interpolation": "nearest",
     }
+    if cmap is not None:
+        kwargs["cmap"] = cmap
     extent = _image_extent(result)
     if extent is not None:
         kwargs["extent"] = extent
@@ -195,6 +219,9 @@ def plot_spatial_image(
     show_fiducial: bool = True,
     show_centroid: bool = True,
     colorbar: bool = True,
+    cmap: Any = None,
+    vmin: float | None = None,
+    vmax: float | None = None,
 ) -> Any:
     """Render a spatial image for an amplifier or LRS2 channel result."""
 
@@ -212,6 +239,9 @@ def plot_spatial_image(
         show_fiducial=show_fiducial,
         show_centroid=show_centroid,
         colorbar=colorbar,
+        cmap=cmap,
+        vmin=vmin,
+        vmax=vmax,
     )
     ax.figure.tight_layout()
     return ax.figure
@@ -225,6 +255,9 @@ def plot_lrs2_channels(
     show_fibers: bool = True,
     show_fiducial: bool = False,
     show_centroid: bool = False,
+    cmap: Any = None,
+    vmin: float | None = None,
+    vmax: float | None = None,
 ) -> Any:
     """Render the four-position LRS2 channel layout.
 
@@ -244,7 +277,7 @@ def plot_lrs2_channels(
     finite_values = (
         np.concatenate(finite_chunks) if finite_chunks else np.array([], dtype=float)
     )
-    vmin, vmax = finite_limits(finite_values, percentiles)
+    vmin, vmax = _display_limits(finite_values, percentiles, vmin, vmax)
 
     fig, axes = plt.subplots(2, 2, figsize=(12, 10), constrained_layout=True)
     for ax, channel_name in zip(axes.flat, order):
@@ -268,8 +301,12 @@ def plot_lrs2_channels(
             "aspect": "equal",
             "interpolation": "nearest",
         }
+        if cmap is not None:
+            kwargs["cmap"] = cmap
         if vmin is not None:
-            kwargs.update(vmin=vmin, vmax=vmax)
+            kwargs["vmin"] = vmin
+        if vmax is not None:
+            kwargs["vmax"] = vmax
         extent = grid_extent(
             np.asarray(channel.spatial_x_coordinates, dtype=float),
             np.asarray(channel.spatial_y_coordinates, dtype=float),
@@ -318,6 +355,9 @@ def plot_virus_ifu_amplifiers(
     show_fibers: bool = True,
     show_fiducial: bool = False,
     show_centroid: bool = False,
+    cmap: Any = None,
+    vmin: float | None = None,
+    vmax: float | None = None,
 ) -> Any:
     """Render available amplifier products for one VIRUS IFU.
 
@@ -357,6 +397,9 @@ def plot_virus_ifu_amplifiers(
             show_fiducial=show_fiducial,
             show_centroid=show_centroid,
             colorbar=True,
+            cmap=cmap,
+            vmin=vmin,
+            vmax=vmax,
         )
     if title:
         fig.suptitle(title)
@@ -371,6 +414,9 @@ def plot_virus_ifu_grid(
     show_fibers: bool = True,
     show_fiducial: bool = False,
     show_centroid: bool = False,
+    cmap: Any = None,
+    vmin: float | None = None,
+    vmax: float | None = None,
 ) -> Any:
     """Render VIRUS IFU images in the authoritative focal-plane layout."""
 
@@ -406,7 +452,9 @@ def plot_virus_ifu_grid(
         np.asarray(product.image, dtype=float).ravel()
         for product in products.values()
     ]
-    vmin, vmax = finite_limits(np.concatenate(image_values), percentiles)
+    vmin, vmax = _display_limits(
+        np.concatenate(image_values), percentiles, vmin, vmax
+    )
     fig, axes = plt.subplots(
         len(y_coordinates),
         len(x_coordinates),
@@ -462,11 +510,15 @@ def plot_virus_ifu_grid(
                 "aspect": "equal",
                 "interpolation": "nearest",
             }
+            if cmap is not None:
+                kwargs["cmap"] = cmap
             extent = _image_extent(product)
             if extent is not None:
                 kwargs["extent"] = extent
             if vmin is not None:
-                kwargs.update(vmin=vmin, vmax=vmax)
+                kwargs["vmin"] = vmin
+            if vmax is not None:
+                kwargs["vmax"] = vmax
             artist = ax.imshow(image, **kwargs)
 
             if show_fibers:
@@ -488,7 +540,7 @@ def plot_virus_ifu_grid(
                 if np.all(np.isfinite([cx, cy])):
                     ax.scatter([cx], [cy], marker="+", s=40, linewidths=1.0)
 
-    if artist is not None and vmin is not None:
+    if artist is not None and (vmin is not None or vmax is not None):
         fig.colorbar(
             artist,
             ax=axes.ravel().tolist(),

@@ -155,7 +155,7 @@ The default quick-look settings are:
 | --- | ---: | ---: |
 | Fractional extraction width | 5 detector pixels | 5 detector pixels |
 | Collapse window/statistic | central 200 columns, median | central 200 columns, median |
-| Gaussian-splat FWHM | 1.5 arcsec | 1.2 arcsec |
+| Gaussian-splat FWHM | 1.8 arcsec | 1.2 arcsec |
 | Output pixel scale | 1.0 arcsec/pixel | 0.4 arcsec/pixel |
 | Standard-star fiducial | `(0, 0)` in selected IFU | `(0, 0)` in LRS2 IFU |
 

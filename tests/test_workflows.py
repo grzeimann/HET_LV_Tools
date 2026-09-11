@@ -119,13 +119,13 @@ def test_workflow_selects_instrument_spatial_defaults_and_pads_bounds() -> None:
         detector, _dense_topology(), instrument="lrs2"
     )
 
-    assert VIRUS_SPATIAL_DEFAULTS["gaussian_fwhm_arcsec"] == 1.5
+    assert VIRUS_SPATIAL_DEFAULTS["gaussian_fwhm_arcsec"] == 1.8
     assert VIRUS_SPATIAL_DEFAULTS["pixel_scale_arcsec"] == 1.0
     assert VIRUS_SPATIAL_DEFAULTS["grid_padding_arcsec"] == 1.5
     assert LRS2_SPATIAL_DEFAULTS["gaussian_fwhm_arcsec"] == 1.2
     assert LRS2_SPATIAL_DEFAULTS["pixel_scale_arcsec"] == 0.4
     assert LRS2_SPATIAL_DEFAULTS["grid_padding_arcsec"] == 0.3
-    assert virus.spatial_gaussian_fwhm_arcsec == 1.5
+    assert virus.spatial_gaussian_fwhm_arcsec == 1.8
     assert virus.spatial_pixel_scale_arcsec == 1.0
     assert lrs2.spatial_gaussian_fwhm_arcsec == 1.2
     assert lrs2.spatial_pixel_scale_arcsec == 0.4

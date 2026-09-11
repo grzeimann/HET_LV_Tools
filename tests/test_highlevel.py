@@ -219,7 +219,12 @@ def test_virus_product_plot_without_ifu_uses_the_focal_plane_grid() -> None:
     result = VIRUSQuicklookSet(ifus=products)
     product = QuicklookProduct.from_result(None, "target", result)
 
-    figure = product.plot(show_fibers=False)
+    figure = product.plot(
+        show_fibers=False,
+        cmap="magma",
+        vmin=1.0,
+        vmax=4.0,
+    )
 
     image_axes = {
         axis.get_title(): axis
@@ -229,6 +234,19 @@ def test_virus_product_plot_without_ifu_uses_the_focal_plane_grid() -> None:
     assert set(image_axes) == {"074", "075"}
     assert image_axes["074"].get_position().y0 > image_axes["075"].get_position().y0
     assert len(figure.axes) >= 100
+    assert image_axes["074"].images[0].get_cmap().name == "magma"
+    assert image_axes["074"].images[0].get_clim() == (1.0, 4.0)
+
+    single_figure = product.plot(
+        ifu="074",
+        show_fibers=False,
+        cmap="viridis",
+        vmin=0.0,
+        vmax=10.0,
+    )
+    single_image = single_figure.axes[0].images[0]
+    assert single_image.get_cmap().name == "viridis"
+    assert single_image.get_clim() == (0.0, 10.0)
 
 
 def test_exposure_id_lookup_rejects_ambiguity(tmp_path: Path) -> None:

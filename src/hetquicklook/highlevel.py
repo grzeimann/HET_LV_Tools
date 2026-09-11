@@ -511,6 +511,9 @@ class QuicklookIFU:
         show_fibers: bool = True,
         show_fiducial: bool = False,
         show_centroid: bool = False,
+        cmap: Any = None,
+        vmin: float | None = None,
+        vmax: float | None = None,
     ) -> Any:
         from .visualization import plot_spatial_image
 
@@ -521,6 +524,9 @@ class QuicklookIFU:
             show_fibers=show_fibers,
             show_fiducial=show_fiducial,
             show_centroid=show_centroid,
+            cmap=cmap,
+            vmin=vmin,
+            vmax=vmax,
         )
 
     def plot_amplifiers(
@@ -531,6 +537,9 @@ class QuicklookIFU:
         show_fibers: bool = True,
         show_fiducial: bool = False,
         show_centroid: bool = False,
+        cmap: Any = None,
+        vmin: float | None = None,
+        vmax: float | None = None,
     ) -> Any:
         """Render the four amplifier images as a diagnostic evidence view."""
 
@@ -553,6 +562,9 @@ class QuicklookIFU:
             show_fibers=show_fibers,
             show_fiducial=show_fiducial,
             show_centroid=show_centroid,
+            cmap=cmap,
+            vmin=vmin,
+            vmax=vmax,
         )
 
 
@@ -615,6 +627,9 @@ class QuicklookProduct:
         show_fiducial: bool | None = None,
         show_centroid: bool | None = None,
         ifu: str | None = None,
+        cmap: Any = None,
+        vmin: float | None = None,
+        vmax: float | None = None,
     ) -> Any:
         """Dispatch to the instrument-level presentation available here."""
 
@@ -631,6 +646,9 @@ class QuicklookProduct:
                 show_fibers=show_fibers,
                 show_fiducial=show_fiducial,
                 show_centroid=show_centroid,
+                cmap=cmap,
+                vmin=vmin,
+                vmax=vmax,
             )
         if not self.ifus:
             raise ValueError("VIRUS quick look contains no processable IFU products")
@@ -651,6 +669,9 @@ class QuicklookProduct:
                 show_fibers=show_fibers,
                 show_fiducial=show_fiducial,
                 show_centroid=show_centroid,
+                cmap=cmap,
+                vmin=vmin,
+                vmax=vmax,
             )
         else:
             try:
@@ -664,6 +685,9 @@ class QuicklookProduct:
             show_fibers=show_fibers,
             show_fiducial=show_fiducial,
             show_centroid=show_centroid,
+            cmap=cmap,
+            vmin=vmin,
+            vmax=vmax,
         )
 
     def __repr__(self) -> str:

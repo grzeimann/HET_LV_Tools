@@ -170,7 +170,7 @@ defaults before calling the instrument-agnostic algorithm:
 
 | Instrument | Gaussian FWHM | Pixel scale | Standard-star fiducial |
 | --- | ---: | ---: | --- |
-| VIRUS | 1.5 arcsec | 1.0 arcsec/pixel | `(0, 0)` within the selected IFU |
+| VIRUS | 1.8 arcsec | 1.0 arcsec/pixel | `(0, 0)` within the selected IFU |
 | LRS2 | 1.2 arcsec | 0.4 arcsec/pixel | `(0, 0)` within the LRS2 IFU |
 
 The algorithm converts FWHM to pixel sigma as

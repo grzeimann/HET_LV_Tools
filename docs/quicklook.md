@@ -64,6 +64,10 @@ IFU directly. The individual amplifier views remain available through
 `product.ifus["074"].plot_amplifiers()` when the quick look was run with
 `detailed_evidence=True`.
 
+All `product.plot()` variants accept `cmap`, `vmin`, and `vmax` for display
+control. Explicit `vmin` or `vmax` values override the corresponding percentile
+limit; omitted limits continue to use the `percentiles` argument.
+
 The high-level objects are orchestration and presentation wrappers. The
 lower-level numerical workflows remain useful when an expert needs direct
 control over a prepared detector array and `FiberTopology`; their richer
@@ -104,7 +108,7 @@ parameters:
 
 | Instrument | Gaussian FWHM | Pixel scale |
 | --- | ---: | ---: |
-| VIRUS | 1.5 arcsec | 1.0 arcsec/pixel |
+| VIRUS | 1.8 arcsec | 1.0 arcsec/pixel |
 | LRS2 | 1.2 arcsec | 0.4 arcsec/pixel |
 
 When bounds are omitted, the spatial algorithm derives them from the physical
