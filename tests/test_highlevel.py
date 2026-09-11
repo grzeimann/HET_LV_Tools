@@ -297,10 +297,15 @@ def test_quicklook_dispatches_from_existing_classification(
     assert calls["trace_provider"] is night._trace_provider
 
 
-def test_science_dispatches_to_target_workflow(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("frame_type", ["sci", "twi", "bias"])
+def test_nonflat_nonstandard_frames_dispatch_to_target_workflow(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    frame_type: str,
 ) -> None:
-    observation = _observation(tmp_path, "obs-1", [("exp-1", "sci", "unknown")])
+    observation = _observation(
+        tmp_path, "obs-1", [("exp-1", frame_type, "unknown")]
+    )
     from hetquicklook.highlevel import QuicklookNight
 
     night = QuicklookNight(
@@ -324,6 +329,7 @@ def test_science_dispatches_to_target_workflow(
 
     assert product.kind == "target"
     assert calls["quicklook_kind"] == "target"
+    assert calls["frame_type"] == frame_type
 
 
 def test_quicklook_dispatches_recognized_standard_to_standard_workflow(

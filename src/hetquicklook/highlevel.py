@@ -370,13 +370,9 @@ class QuicklookExposure:
                 return "flat"
             if self.classification.standard_star is True:
                 return "standard"
-            if self.metadata.frame_class == "science":
-                return "target"
-            raise ValueError(
-                f"Exposure {self.exposure_id!r} is classified as {self.kind!r} "
-                "and has no supported automatic quick look; use an established "
-                "flat or recognized standard-star exposure, or pass an explicit kind."
-            )
+            # The target path is the general spatial quick-look path for every
+            # non-flat, non-standard frame, including twi, bias, dark, and zero.
+            return "target"
         resolved = str(kind).strip().casefold()
         if resolved not in {"flat", "standard", "target"}:
             raise ValueError(

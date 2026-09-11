@@ -31,9 +31,9 @@ Python indexing, so `night[19]` selects the row labelled `19`. The selected
 
 Automatic dispatch uses the existing deterministic classification. Recognized
 LDLS or Qth flats use the flat workflow, catalog-matched standard stars use the
-standard-star workflow, and science exposures use the target workflow. An
-expert may use `exposure.quicklook(kind="flat")`, `kind="standard"`, or
-`kind="target"` when an explicit override is appropriate.
+standard-star workflow, and all other frame types use the target workflow for
+spatial inspection. An expert may use `exposure.quicklook(kind="flat")`,
+`kind="standard"`, or `kind="target"` when an explicit override is appropriate.
 
 VIRUS processing is sequential. For diagnostics, the quick-look call accepts
 `timing=True` and `memory_check=True`. The resulting per-IFU diagnostics are
