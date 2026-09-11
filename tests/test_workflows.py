@@ -93,8 +93,10 @@ def test_workflow_selects_instrument_spatial_defaults_and_pads_bounds() -> None:
 
     assert VIRUS_SPATIAL_DEFAULTS["gaussian_fwhm_arcsec"] == 1.5
     assert VIRUS_SPATIAL_DEFAULTS["pixel_scale_arcsec"] == 1.0
+    assert VIRUS_SPATIAL_DEFAULTS["grid_padding_arcsec"] == 1.1
     assert LRS2_SPATIAL_DEFAULTS["gaussian_fwhm_arcsec"] == 1.2
     assert LRS2_SPATIAL_DEFAULTS["pixel_scale_arcsec"] == 0.4
+    assert LRS2_SPATIAL_DEFAULTS["grid_padding_arcsec"] == 0.3
     assert virus.spatial_gaussian_fwhm_arcsec == 1.5
     assert virus.spatial_pixel_scale_arcsec == 1.0
     assert lrs2.spatial_gaussian_fwhm_arcsec == 1.2
@@ -103,10 +105,10 @@ def test_workflow_selects_instrument_spatial_defaults_and_pads_bounds() -> None:
         virus.spatial_x_coordinates.size - 1
     )
     np.testing.assert_allclose(np.diff(lrs2.spatial_x_coordinates), 0.4)
-    assert not virus.spatial_support[:, 0].any()
-    assert not virus.spatial_support[:, -1].any()
-    assert not lrs2.spatial_support[:, 0].any()
-    assert not lrs2.spatial_support[:, -1].any()
+    assert virus.spatial_x_coordinates[0] == pytest.approx(-3.0)
+    assert virus.spatial_x_coordinates[-1] == pytest.approx(3.0)
+    assert lrs2.spatial_x_coordinates[0] == pytest.approx(-1.6)
+    assert lrs2.spatial_x_coordinates[-1] == pytest.approx(1.6)
 
 
 def test_workflow_spatial_overrides_are_passed_to_generic_splat() -> None:
@@ -116,10 +118,13 @@ def test_workflow_spatial_overrides_are_passed_to_generic_splat() -> None:
         instrument="lrs2",
         gaussian_fwhm=2.0,
         pixel_scale=0.5,
+        grid_padding_arcsec=0.0,
     )
 
     assert result.spatial_gaussian_fwhm_arcsec == 2.0
     assert result.spatial_pixel_scale_arcsec == 0.5
+    assert result.spatial_x_coordinates[0] == pytest.approx(-1.0)
+    assert result.spatial_x_coordinates[-1] == pytest.approx(1.0)
     np.testing.assert_allclose(np.diff(result.spatial_x_coordinates), 0.5)
 
 

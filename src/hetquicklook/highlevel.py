@@ -364,6 +364,7 @@ class QuicklookExposure:
         collapse_statistic: str = DEFAULT_COLLAPSE_STATISTIC,
         gaussian_fwhm_arcsec: float | None = None,
         pixel_scale_arcsec: float | None = None,
+        grid_padding_arcsec: float | None = None,
         output_shape: tuple[int, int] | None = None,
         origin: tuple[float, float] | None = None,
         resource_root: str | Path | None = None,
@@ -395,6 +396,7 @@ class QuicklookExposure:
             collapse_statistic=collapse_statistic,
             gaussian_fwhm_arcsec=gaussian_fwhm_arcsec,
             pixel_scale_arcsec=pixel_scale_arcsec,
+            grid_padding_arcsec=grid_padding_arcsec,
             output_shape=output_shape,
             origin=origin,
         )

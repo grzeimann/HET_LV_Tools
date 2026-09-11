@@ -42,9 +42,9 @@ def _requested_grid(
 ) -> tuple[np.ndarray, np.ndarray]:
     """Resolve output coordinate arrays from explicit bounds or positions.
 
-    Automatically inferred bounds include the requested Gaussian support
-    radius around the authoritative fiber-coordinate extent. Explicit bounds
-    remain an intentional override and are used as supplied.
+    Automatically inferred bounds include the requested padding around the
+    authoritative fiber-coordinate extent. Explicit bounds remain an
+    intentional override and are used as supplied.
     """
 
     finite_positions = positions[np.all(np.isfinite(positions), axis=1)]
@@ -96,6 +96,7 @@ def gaussian_splat(
     x_bounds: Sequence[float] | None = None,
     y_bounds: Sequence[float] | None = None,
     support_sigma: float = DEFAULT_SUPPORT_SIGMA,
+    grid_padding: float | None = None,
     fill_value: float = float("nan"),
 ) -> SpatialReconstructionResult:
     """Reconstruct an IFU-plane image by locally splatting Gaussian fibers.
@@ -112,6 +113,11 @@ def gaussian_splat(
             coordinate origin. Alternatively, bounds can be supplied. With no
             grid arguments, bounds are inferred from finite fiber positions.
         support_sigma: Radius in Gaussian sigma used to identify image support.
+        grid_padding: Optional coordinate padding used only when inferring the
+            grid from fiber positions. When omitted, the Gaussian support
+            radius is used for backwards compatibility. This is independent
+            of ``support_sigma`` so the output extent can be reduced without
+            changing the Gaussian reconstruction kernel.
 
     Returns:
         A normalized weighted image, accumulated Gaussian weight, explicit
@@ -140,6 +146,12 @@ def gaussian_splat(
     sigma_coordinate = float(fwhm) / 2.35
     sigma_pixels = sigma_coordinate / float(pixel_scale)
     support_radius = float(support_sigma) * sigma_coordinate
+    if grid_padding is None:
+        resolved_grid_padding = support_radius
+    else:
+        if not np.isfinite(grid_padding) or grid_padding < 0.0:
+            raise ValueError("grid_padding must be finite and non-negative")
+        resolved_grid_padding = float(grid_padding)
     x_coordinates, y_coordinates = _requested_grid(
         positions,
         pixel_scale=float(pixel_scale),
@@ -147,7 +159,7 @@ def gaussian_splat(
         origin=origin,
         x_bounds=x_bounds,
         y_bounds=y_bounds,
-        padding=support_radius,
+        padding=resolved_grid_padding,
     )
     ny, nx = y_coordinates.size, x_coordinates.size
     x_grid, y_grid = np.meshgrid(x_coordinates, y_coordinates)

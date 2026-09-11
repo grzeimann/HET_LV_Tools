@@ -41,11 +41,13 @@ if TYPE_CHECKING:
 VIRUS_SPATIAL_DEFAULTS = {
     "gaussian_fwhm_arcsec": 1.5,
     "pixel_scale_arcsec": 1.0,
+    "grid_padding_arcsec": 1.1,
     "intended_fiducial": (0.0, 0.0),
 }
 LRS2_SPATIAL_DEFAULTS = {
     "gaussian_fwhm_arcsec": 1.2,
     "pixel_scale_arcsec": 0.4,
+    "grid_padding_arcsec": 0.3,
     "intended_fiducial": (0.0, 0.0),
 }
 INSTRUMENT_SPATIAL_DEFAULTS = {
@@ -374,6 +376,7 @@ def _spatial_quicklook(
     aperture: int | float | None = None,
     gaussian_fwhm: float | None = None,
     pixel_scale: float | None = None,
+    grid_padding_arcsec: float | None = None,
     instrument: Instrument | str = Instrument.VIRUS,
     spatial_defaults: Mapping[str, object] | None = None,
     output_shape: tuple[int, int] | None = None,
@@ -393,6 +396,14 @@ def _spatial_quicklook(
             spatial_defaults=spatial_defaults,
         )
     )
+    defaults = (
+        spatial_defaults
+        if spatial_defaults is not None
+        else spatial_defaults_for(parsed_instrument)
+    )
+    resolved_grid_padding = defaults.get("grid_padding_arcsec")
+    if grid_padding_arcsec is not None:
+        resolved_grid_padding = grid_padding_arcsec
     dense = trace_map is not None or _has_dense_trace_geometry(topology, image.shape[1])
     if dense:
         traces = _dense_trace_map(topology, image.shape[1]) if trace_map is None else np.asarray(trace_map, dtype=float)
@@ -442,6 +453,7 @@ def _spatial_quicklook(
             None if errors_array is None else errors_array,
             fwhm=resolved_fwhm,
             pixel_scale=resolved_pixel_scale,
+            grid_padding=resolved_grid_padding,
             output_shape=output_shape,
             origin=origin,
         )
@@ -510,6 +522,7 @@ def run_ldls_flat_quicklook(
     aperture: int | float | None = None,
     gaussian_fwhm: float | None = None,
     pixel_scale: float | None = None,
+    grid_padding_arcsec: float | None = None,
     instrument: Instrument | str = Instrument.VIRUS,
     spatial_defaults: Mapping[str, object] | None = None,
     output_shape: tuple[int, int] | None = None,
@@ -528,6 +541,7 @@ def run_ldls_flat_quicklook(
         aperture=aperture,
         gaussian_fwhm=gaussian_fwhm,
         pixel_scale=pixel_scale,
+        grid_padding_arcsec=grid_padding_arcsec,
         instrument=instrument,
         spatial_defaults=spatial_defaults,
         output_shape=output_shape,
@@ -548,6 +562,7 @@ def run_standard_star_quicklook(
     aperture: int | float | None = None,
     gaussian_fwhm: float | None = None,
     pixel_scale: float | None = None,
+    grid_padding_arcsec: float | None = None,
     instrument: Instrument | str = Instrument.VIRUS,
     spatial_defaults: Mapping[str, object] | None = None,
     output_shape: tuple[int, int] | None = None,
@@ -581,6 +596,7 @@ def run_standard_star_quicklook(
         aperture=aperture,
         gaussian_fwhm=gaussian_fwhm,
         pixel_scale=pixel_scale,
+        grid_padding_arcsec=grid_padding_arcsec,
         instrument=instrument,
         spatial_defaults=spatial_defaults,
         output_shape=output_shape,
@@ -734,6 +750,7 @@ def _run_archive_amplifier_quicklook(
     collapse_statistic: str,
     gaussian_fwhm_arcsec: float | None,
     pixel_scale_arcsec: float | None,
+    grid_padding_arcsec: float | None,
     output_shape: tuple[int, int] | None,
     origin: tuple[float, float] | None,
 ) -> tuple["RawFrameData", AlgorithmResult, AmplifierTopologyResult, SpatialQuicklook]:
@@ -761,6 +778,7 @@ def _run_archive_amplifier_quicklook(
             statistic=collapse_statistic,
             gaussian_fwhm=gaussian_fwhm_arcsec,
             pixel_scale=pixel_scale_arcsec,
+            grid_padding_arcsec=grid_padding_arcsec,
             instrument=instrument,
             output_shape=output_shape,
             origin=origin,
@@ -776,6 +794,7 @@ def _run_archive_amplifier_quicklook(
             statistic=collapse_statistic,
             gaussian_fwhm=gaussian_fwhm_arcsec,
             pixel_scale=pixel_scale_arcsec,
+            grid_padding_arcsec=grid_padding_arcsec,
             instrument=instrument,
             output_shape=output_shape,
             origin=origin,
@@ -798,6 +817,7 @@ def run_lrs2_channel_quicklooks(
     collapse_statistic: str = DEFAULT_COLLAPSE_STATISTIC,
     gaussian_fwhm_arcsec: float | None = None,
     pixel_scale_arcsec: float | None = None,
+    grid_padding_arcsec: float | None = None,
     output_shape: tuple[int, int] | None = None,
     origin: tuple[float, float] | None = None,
     allow_partial: bool = False,
@@ -881,6 +901,7 @@ def run_lrs2_channel_quicklooks(
                 collapse_statistic=collapse_statistic,
                 gaussian_fwhm_arcsec=gaussian_fwhm_arcsec,
                 pixel_scale_arcsec=pixel_scale_arcsec,
+                grid_padding_arcsec=grid_padding_arcsec,
                 output_shape=output_shape,
                 origin=origin,
             )
@@ -909,6 +930,7 @@ def run_lrs2_channel_quicklooks(
                     {token: evidence[token].product for token in tokens},
                     gaussian_fwhm_arcsec=gaussian_fwhm_arcsec,
                     pixel_scale_arcsec=pixel_scale_arcsec,
+                    grid_padding_arcsec=grid_padding_arcsec,
                     output_shape=output_shape,
                     origin=origin,
                 )
@@ -921,6 +943,7 @@ def run_lrs2_channel_quicklooks(
             {token: item.product for token, item in evidence.items()},
             gaussian_fwhm_arcsec=gaussian_fwhm_arcsec,
             pixel_scale_arcsec=pixel_scale_arcsec,
+            grid_padding_arcsec=grid_padding_arcsec,
             output_shape=output_shape,
             origin=origin,
         )
@@ -947,6 +970,7 @@ def run_virus_ifu_quicklooks(
     collapse_statistic: str = DEFAULT_COLLAPSE_STATISTIC,
     gaussian_fwhm_arcsec: float | None = None,
     pixel_scale_arcsec: float | None = None,
+    grid_padding_arcsec: float | None = None,
     output_shape: tuple[int, int] | None = None,
     origin: tuple[float, float] | None = None,
 ) -> VIRUSQuicklookSet:
@@ -1018,6 +1042,7 @@ def run_virus_ifu_quicklooks(
                     collapse_statistic=collapse_statistic,
                     gaussian_fwhm_arcsec=gaussian_fwhm_arcsec,
                     pixel_scale_arcsec=pixel_scale_arcsec,
+                    grid_padding_arcsec=grid_padding_arcsec,
                     output_shape=output_shape,
                     origin=origin,
                 )
@@ -1134,6 +1159,7 @@ def combine_lrs2_channel_products(
     *,
     gaussian_fwhm_arcsec: float | None = None,
     pixel_scale_arcsec: float | None = None,
+    grid_padding_arcsec: float | None = None,
     output_shape: tuple[int, int] | None = None,
     origin: tuple[float, float] | None = None,
 ) -> LRS2ChannelQuicklook:
@@ -1177,6 +1203,11 @@ def combine_lrs2_channel_products(
         if pixel_scale_arcsec is None
         else float(pixel_scale_arcsec)
     )
+    resolved_grid_padding = (
+        defaults.get("grid_padding_arcsec")
+        if grid_padding_arcsec is None
+        else grid_padding_arcsec
+    )
     intended = tuple(defaults["intended_fiducial"])
     spatial = gaussian_splat(
         positions,
@@ -1184,6 +1215,7 @@ def combine_lrs2_channel_products(
         errors,
         fwhm=resolved_fwhm,
         pixel_scale=resolved_pixel_scale,
+        grid_padding=resolved_grid_padding,
         output_shape=output_shape,
         origin=origin,
     )
@@ -1222,6 +1254,7 @@ def combine_lrs2_channels(
     *,
     gaussian_fwhm_arcsec: float | None = None,
     pixel_scale_arcsec: float | None = None,
+    grid_padding_arcsec: float | None = None,
     output_shape: tuple[int, int] | None = None,
     origin: tuple[float, float] | None = None,
 ) -> dict[str, LRS2ChannelQuicklook]:
@@ -1262,6 +1295,7 @@ def combine_lrs2_channels(
             {token: canonical_products[token] for token in lrs2_amplifier_tokens_for_channel(channel)},
             gaussian_fwhm_arcsec=gaussian_fwhm_arcsec,
             pixel_scale_arcsec=pixel_scale_arcsec,
+            grid_padding_arcsec=grid_padding_arcsec,
             output_shape=output_shape,
             origin=origin,
         )

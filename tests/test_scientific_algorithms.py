@@ -215,3 +215,17 @@ def test_gaussian_splat_supports_subpixel_and_multiple_fibers() -> None:
     assert result.image.shape == (7, 7)
     assert np.all(np.isfinite(result.image[result.support]))
     assert result.contribution_count.max() >= 2
+
+
+def test_gaussian_splat_grid_padding_does_not_change_kernel_support() -> None:
+    result = gaussian_splat(
+        np.array([[0.0, 0.0], [1.0, 0.0]]),
+        np.array([2.0, 4.0]),
+        fwhm=1.8,
+        pixel_scale=1.0,
+        grid_padding=0.0,
+    )
+
+    np.testing.assert_allclose(result.x_coordinates, [0.0, 1.0])
+    np.testing.assert_allclose(result.y_coordinates, [0.0])
+    assert result.contribution_count.max() == 2
