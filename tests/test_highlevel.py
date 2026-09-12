@@ -31,10 +31,12 @@ def _observation(
     *,
     instrument: Instrument = Instrument.LRS2,
     standard_ids: set[str] | None = None,
+    observation_date: date = date(2026, 5, 12),
+    observation_times: tuple[datetime, ...] | None = None,
 ) -> Observation:
     discovered = DiscoveredObservation(
         archive_path=tmp_path / f"{observation_id}.tar",
-        date=date(2026, 5, 12),
+        date=observation_date,
         instrument=instrument,
     )
     exposures = []
@@ -54,7 +56,17 @@ def _observation(
                     exposure_id=exposure_id,
                     frame_types=(frame_type,),
                     frame_class="science" if frame_type == "sci" else "calibration",
-                    observation_time=datetime(2026, 5, 12, index, 0),
+                    observation_time=(
+                        observation_times[index - 1]
+                        if observation_times is not None
+                        else datetime(
+                            observation_date.year,
+                            observation_date.month,
+                            observation_date.day,
+                            index,
+                            0,
+                        )
+                    ),
                     object_name=object_name,
                     exposure_time_s=30.0,
                     program_id="program-1",
@@ -123,7 +135,9 @@ def test_night_update_refreshes_the_existing_inventory(
         "obs-2",
         [("exp-2", "sci", "second"), ("exp-3", "sci", "third")],
     )
-    discovered_values = iter(((first.discovered,), (second.discovered,)))
+    discovered_values = iter(
+        ((first.discovered,), (), (second.discovered,), ())
+    )
     loaded_values = iter((first, second))
     monkeypatch.setattr(
         highlevel,
@@ -147,6 +161,88 @@ def test_night_update_refreshes_the_existing_inventory(
     assert [item.exposure_id for item in night] == ["exp-2", "exp-3"]
     assert "exp-2" in night._repr_html_()
     assert "exp-1" not in night._repr_html_()
+
+
+def test_night_uses_previous_evening_flats_when_current_date_has_none(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    current = _observation(
+        tmp_path,
+        "current",
+        [("science", "sci", "target")],
+        observation_date=date(2026, 5, 12),
+    )
+    late_flat = _observation(
+        tmp_path,
+        "late-flat",
+        [("late-flat", "flt", "ldls_long")],
+        observation_date=date(2026, 5, 11),
+        observation_times=(datetime(2026, 5, 11, 17, 0),),
+    )
+    early_flat = _observation(
+        tmp_path,
+        "early-flat",
+        [("early-flat", "flt", "ldls_long")],
+        observation_date=date(2026, 5, 11),
+        observation_times=(datetime(2026, 5, 11, 16, 59),),
+    )
+    discovered_by_date = {
+        date(2026, 5, 12): (current.discovered,),
+        date(2026, 5, 11): (late_flat.discovered, early_flat.discovered),
+    }
+    loaded_by_observation = {
+        item.discovered.observation_id: item
+        for item in (current, late_flat, early_flat)
+    }
+    calls: list[date | str] = []
+
+    def fake_discover(config, *, instrument, date):
+        calls.append(date)
+        return discovered_by_date[highlevel._calendar_date(date)]
+
+    monkeypatch.setattr(highlevel, "discover_observations", fake_discover)
+    monkeypatch.setattr(
+        highlevel,
+        "load_observation",
+        lambda item, **kwargs: loaded_by_observation[item.observation_id],
+    )
+
+    site = QuicklookSite(raw_roots={"lrs2": tmp_path}, trace_root=tmp_path)
+    night = site.night("20260512", instrument="lrs2")
+
+    assert calls == ["20260512", date(2026, 5, 11)]
+    assert [item.exposure_id for item in night] == ["science"]
+    assert [
+        candidate.exposure_id
+        for candidate, _ in night._trace_provider._candidates
+    ] == ["science", "late-flat"]
+
+
+def test_night_does_not_search_previous_date_when_current_flat_exists(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    current_flat = _observation(
+        tmp_path, "current-flat", [("current-flat", "flt", "ldls_long")],
+        observation_date=date(2026, 5, 12),
+    )
+    calls: list[date | str] = []
+
+    def fake_discover(config, *, instrument, date):
+        calls.append(date)
+        return (current_flat.discovered,)
+
+    monkeypatch.setattr(highlevel, "discover_observations", fake_discover)
+    monkeypatch.setattr(
+        highlevel,
+        "load_observation",
+        lambda item, **kwargs: current_flat,
+    )
+
+    site = QuicklookSite(raw_roots={"lrs2": tmp_path}, trace_root=tmp_path)
+    night = site.night("20260512", instrument="lrs2")
+
+    assert calls == ["20260512"]
+    assert night._fallback_calibration_candidates == ()
 
 
 def test_night_html_is_compact_and_escapes_metadata(tmp_path: Path) -> None:

@@ -38,6 +38,12 @@ standard-star workflow, and all other frame types use the target workflow for
 spatial inspection. An expert may use `exposure.quicklook(kind="flat")`,
 `kind="standard"`, or `kind="target"` when an explicit override is appropriate.
 
+If the selected UT date contains no classified flat, `QuicklookSite.night()`
+also searches the previous UT date for classified flats with observation times
+from 17:00 UT through 23:59:59 UT. Those previous-evening flats are added to
+the trace candidate pool for current-date standard-star and target quick looks;
+they are not added to the displayed exposure table.
+
 VIRUS processing is sequential. For diagnostics, the quick-look call accepts
 `timing=True` and `memory_check=True`. The resulting per-IFU diagnostics are
 available at `product.ifus["074"].diagnostics`.

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date, datetime, time as clock_time, timedelta
 from html import escape
 from pathlib import Path
 from typing import Any
@@ -36,6 +36,7 @@ _TABLE_COLUMNS = (
     "Amplifiers/components",
 )
 _TABLE_SEQUENCE_LIMIT = 8
+_PREVIOUS_NIGHT_CALIBRATION_START_UT = clock_time(hour=17)
 
 
 def _package_trace_root() -> Path:
@@ -86,6 +87,42 @@ def _calibration_label(classification: ExposureClassification) -> str | None:
     if classification.standard_star is True and classification.standard_target:
         return f"standard: {classification.standard_target}"
     return None
+
+
+def _calendar_date(value: str | date) -> date:
+    """Normalize the accepted night-date forms to a calendar date."""
+
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    text = str(value).strip()
+    for format_string in ("%Y%m%d", "%Y-%m-%d", "%Y_%m_%d"):
+        try:
+            return datetime.strptime(text, format_string).date()
+        except ValueError:
+            continue
+    raise ValueError(f"Unsupported date format: {value!r}")
+
+
+def _is_previous_evening_flat(exposure: Exposure, previous_date: date) -> bool:
+    """Return whether an exposure is a flat taken after 17 UT."""
+
+    if exposure.classification.quicklook_kind != "flat":
+        return False
+    observation_time = exposure.metadata.observation_time or exposure.exposure_id
+    normalized = workflows._as_datetime(observation_time, previous_date)
+    start = datetime.combine(previous_date, _PREVIOUS_NIGHT_CALIBRATION_START_UT)
+    end = datetime.combine(previous_date + timedelta(days=1), clock_time.min)
+    return start <= normalized < end
+
+
+def _has_classified_flat(observations: tuple[Observation, ...]) -> bool:
+    return any(
+        exposure.classification.quicklook_kind == "flat"
+        for observation in observations
+        for exposure in observation.exposures
+    )
 
 
 def _exposure_row(row: int, observation: Observation, exposure: Exposure) -> dict[str, Any]:
@@ -173,13 +210,45 @@ class QuicklookSite:
                 f"available roots: {available}"
             ) from error
 
+    def _previous_evening_calibration_candidates(
+        self,
+        instrument: Instrument,
+        observed_date: date,
+        current_observations: tuple[Observation, ...],
+    ) -> tuple[tuple[Exposure, date], ...]:
+        """Find previous-date evening flats only when the current date has none."""
+
+        if _has_classified_flat(current_observations):
+            return ()
+
+        previous_date = observed_date - timedelta(days=1)
+        previous_discovered = discover_observations(
+            self.config_for(instrument), instrument=instrument, date=previous_date
+        )
+        candidates: list[tuple[Exposure, date]] = []
+        for item in previous_discovered:
+            try:
+                observation = load_observation(
+                    item, standard_catalog=self.standard_catalog
+                )
+            except Exception:
+                # A fallback source is optional; an unreadable previous source
+                # must not prevent the current night's inventory from loading.
+                continue
+            candidates.extend(
+                (exposure, previous_date)
+                for exposure in observation.exposures
+                if _is_previous_evening_flat(exposure, previous_date)
+            )
+        return tuple(candidates)
+
     def night(
         self,
         date: str | date,
         *,
         instrument: Instrument | str,
     ) -> "QuicklookNight":
-        """Discover and load exposure metadata for one instrument night."""
+        """Discover one night and retain previous-evening flats when needed."""
 
         parsed = Instrument.from_value(instrument)
         discovered = discover_observations(
@@ -189,24 +258,31 @@ class QuicklookSite:
             load_observation(item, standard_catalog=self.standard_catalog)
             for item in discovered
         )
+        fallback_candidates = self._previous_evening_calibration_candidates(
+            parsed, _calendar_date(date), observations
+        )
         return QuicklookNight(
             site=self,
             date=date,
             instrument=parsed,
             discovered=discovered,
             observations=observations,
+            _fallback_calibration_candidates=fallback_candidates,
         )
 
 
 @dataclass
 class QuicklookNight:
-    """A refreshable, flattened exposure inventory for one date and instrument."""
+    """A refreshable inventory with optional previous-evening flat candidates."""
 
     site: QuicklookSite
     date: str | date
     instrument: Instrument
     discovered: tuple[DiscoveredObservation, ...]
     observations: tuple[Observation, ...]
+    _fallback_calibration_candidates: tuple[tuple[Exposure, date], ...] = field(
+        default_factory=tuple, repr=False
+    )
     _exposures: tuple["QuicklookExposure", ...] = field(init=False, repr=False)
     _trace_provider: workflows._QuickTraceProvider = field(init=False, repr=False)
 
@@ -242,13 +318,14 @@ class QuicklookNight:
             for observation in self.observations
             for raw_exposure in observation.exposures
         )
+        candidates += self._fallback_calibration_candidates
         self._trace_provider = workflows._QuickTraceProvider(
             candidates,
             trace_root=self.site.trace_root,
         )
 
     def update(self) -> "QuicklookNight":
-        """Rediscover this night and refresh its table and exposure wrappers."""
+        """Rediscover this night and refresh its table and flat candidates."""
 
         discovered = discover_observations(
             self.site.config_for(self.instrument),
@@ -259,8 +336,12 @@ class QuicklookNight:
             load_observation(item, standard_catalog=self.site.standard_catalog)
             for item in discovered
         )
+        fallback_candidates = self.site._previous_evening_calibration_candidates(
+            self.instrument, _calendar_date(self.date), observations
+        )
         self.discovered = discovered
         self.observations = observations
+        self._fallback_calibration_candidates = fallback_candidates
         self._rebuild()
         return self
 
