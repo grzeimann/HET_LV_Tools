@@ -12,6 +12,27 @@ ROOT/
       observation.tar
 ```
 
+The HET mountain VDAS directory layout is also supported:
+
+```text
+ROOT/
+  20260910/
+    virus/
+      virus0000001/
+        exp01/
+          virus/
+            <FITS files>
+    lrs2/
+      lrs20000001/
+        exp01/
+          lrs2/
+            <FITS files>
+```
+
+Each `virusNNNNNNN` or `lrs2NNNNNNN` directory is treated as one observation.
+FITS files below it are inventoried using paths relative to that directory and
+grouped by the exposure IDs encoded in their basenames.
+
 Date directory names may use `YYYYMMDD`, `YYYY-MM-DD`, or `YYYY_MM_DD`.
 Archives with `.tar`, `.tar.gz`, `.tgz`, `.tar.bz2`, and `.tar.xz` suffixes are
 reported. Discovery does not require companion files or a complete expected

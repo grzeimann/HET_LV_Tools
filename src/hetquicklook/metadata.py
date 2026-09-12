@@ -292,8 +292,8 @@ def exposure_metadata_from_headers(
 class ObservationMetadata:
     """Metadata known for one discovered observation.
 
-    Values absent from the source archive are represented by ``None``. The
-    ``files`` tuple contains only archive members that were actually found.
+    Values absent from the source are represented by ``None``. The ``files``
+    tuple contains only members that were actually found.
     """
 
     observation_id: str
@@ -425,11 +425,11 @@ def metadata_from_members(
 
 
 def metadata_from_archive(observation: DiscoveredObservation) -> ObservationMetadata:
-    """Build an archive summary from an inventoried observation archive.
+    """Build a source summary from an inventoried observation source.
 
-    Archive members are listed even when no FITS member is present. This keeps
+    Source members are listed even when no FITS member is present. This keeps
     absence of a header discoverable without turning it into a completeness
-    failure. A multi-exposure archive does not borrow one exposure's header.
+    failure. A multi-exposure source does not borrow one exposure's header.
     """
 
     return metadata_from_members(observation, inventory_members(observation))

@@ -69,7 +69,7 @@ VIRUS_STANDARD_FIDUCIAL = VIRUS_SPATIAL_DEFAULTS["intended_fiducial"]
 
 
 class QuicklookError(RuntimeError):
-    """Raised when an archive-backed quick look cannot complete."""
+    """Raised when a filesystem-backed quick look cannot complete."""
 
 
 @dataclass(frozen=True)
@@ -297,7 +297,7 @@ class LRS2AmplifierQuicklookEvidence:
 
 @dataclass(frozen=True)
 class AmplifierQuicklookEvidence:
-    """Evidence for one archive-backed amplifier quick look.
+    """Evidence for one filesystem-backed amplifier quick look.
 
     This generic envelope is used by the high-level VIRUS orchestration.  The
     existing LRS2-specific envelope remains available because it is part of
@@ -1281,7 +1281,7 @@ def _run_archive_amplifier_quicklook(
     SpatialQuicklook,
     QuicklookDiagnostics,
 ]:
-    """Run the shared archive-backed amplifier path once."""
+    """Run the shared filesystem-backed amplifier path once."""
 
     timings: dict[str, float] = {}
     stage_prefix = "target" if quicklook_kind in {"standard", "target"} else "flat"
@@ -1749,7 +1749,7 @@ def run_virus_ifu_quicklooks(
     memory_check: bool = False,
     detailed_evidence: bool = False,
 ) -> VIRUSQuicklookSet:
-    """Run archive-backed VIRUS amplifier quick looks and compose each IFU.
+    """Run filesystem-backed VIRUS amplifier quick looks and compose each IFU.
 
     Each complete IFU returns one physical IFU-plane image built from all
     four amplifier products. The individual amplifier evidence remains

@@ -29,8 +29,9 @@ python -m pip install -e ".[dev]"
 
 ## Quickstart (CLI)
 
-The CLI currently provides archive discovery and member inventory. It accepts
-direct date/instrument archives and the nested VIRUS Corral date-tar layout.
+The CLI currently provides archive or HET directory discovery and member
+inventory. It accepts direct date/instrument archives, the HET mountain VDAS
+directory layout, and the nested VIRUS Corral date-tar layout.
 
 ```bash
 # Show help and verify installation
@@ -39,7 +40,7 @@ hetquicklook -h
 # List VIRUS observations for one night
 hetquicklook discover /path/to/data --instrument virus --date 20260910
 
-# Inspect literal archive members and parsed frame identities as JSON
+# Inspect literal source members and parsed frame identities as JSON
 hetquicklook discover /path/to/data --instrument virus --date 20260910 \
   --json --inventory
 ```
@@ -108,6 +109,25 @@ ROOT/
       observation.tar
 ```
 
+The HET mountain VDAS directory layout is also supported. Each observation
+directory is treated like one observation archive, and its FITS files are
+grouped by the exposure IDs encoded in their basenames:
+
+```text
+ROOT/
+  20260910/
+    virus/
+      virus0000001/
+        exp01/
+          virus/
+            <FITS files>
+    lrs2/
+      lrs20000001/
+        exp01/
+          lrs2/
+            <FITS files>
+```
+
 VIRUS Corral date archives are also supported:
 
 ```text
@@ -119,9 +139,10 @@ ROOT/
 ```
 
 The package inventories what is present, including malformed members, partial
-amplifier sets, nested archive provenance, and archives containing multiple
-exposure IDs. It does not infer completeness during discovery. The discovery
-layer recognizes `.tar`, `.tar.gz`, `.tgz`, `.tar.bz2`, and `.tar.xz` archives.
+amplifier sets, nested archive provenance, and archives or directories
+containing multiple exposure IDs. It does not infer completeness during
+discovery. The discovery layer recognizes `.tar`, `.tar.gz`, `.tgz`, `.tar.bz2`,
+and `.tar.xz` archives.
 
 Static VIRUS and LRS2 fiber-position resources are packaged with
 `hetquicklook`. Dated detector traces are supplied through a trace root with
@@ -135,8 +156,8 @@ TRACE_ROOT/
 ```
 
 See [installation](docs/installation.md) for the topology loader and
-[data-layout documentation](docs/data_layout.md) for the supported archive
-forms.
+[data-layout documentation](docs/data_layout.md) for the supported archive and
+directory forms.
 
 ## Current scientific capabilities
 
@@ -216,11 +237,9 @@ Run the test suite with:
 python -m pytest
 ```
 
-The [implementation workspace](docs/implementation_workspace.md) records the
-current implementation boundary, scientific contracts, and remaining
-integration questions. [Architectural_Design.md](Architectural_Design.md)
-describes the separation between discovery, metadata, topology, algorithms,
-workflows, and presentation.
+[Architectural_Design.md](Architectural_Design.md) describes the separation
+between discovery, metadata, topology, algorithms, workflows, and
+presentation.
 
 ## License
 

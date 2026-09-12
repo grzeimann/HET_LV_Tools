@@ -1,9 +1,9 @@
 # Interactive quick start
 
 The high-level API is the normal entry point for an interactive notebook. It
-keeps archive discovery, exposure bookkeeping, detector preparation, trace
-resolution, topology construction, and instrument-specific presentation
-behind a small set of orchestration objects.
+keeps archive or directory discovery, exposure bookkeeping, detector
+preparation, trace resolution, topology construction, and instrument-specific
+presentation behind a small set of orchestration objects.
 
 ```python
 from hetquicklook import QuicklookSite
@@ -27,7 +27,7 @@ product.plot()
 ```
 
 Evaluating `LRS2Night` in Jupyter displays one compact row per encoded exposure,
-including exposures from multiple observation archives. Rows use zero-based
+including exposures from multiple observation archives or directories. Rows use zero-based
 Python indexing, so `LRS2Night[19]` selects the row labelled `19`. The selected
 `QuicklookExposure` retains its `observation`, `raw_exposure`, `metadata`, and
 `classification` attributes.
@@ -42,12 +42,12 @@ VIRUS processing is sequential. For diagnostics, the quick-look call accepts
 `timing=True` and `memory_check=True`. The resulting per-IFU diagnostics are
 available at `product.ifus["074"].diagnostics`.
 
-Archive-backed quick looks use the prepared detector's central 200-column
-window for flat, standard-star, and target exposures. Flats are traced from
-their own local window; standards and targets use the cached local trace from
-a suitable classified flat. Extraction is collapsed immediately, so the
-default product does not retain raw detector arrays or extracted spectra. Use
-`exposure.quicklook(detailed_evidence=True)` when detailed per-amplifier
+Archive- or directory-backed quick looks use the prepared detector's central
+200-column window for flat, standard-star, and target exposures. Flats are
+traced from their own local window; standards and targets use the cached local
+trace from a suitable classified flat. Extraction is collapsed immediately, so
+the default product does not retain raw detector arrays or extracted spectra.
+Use `exposure.quicklook(detailed_evidence=True)` when detailed per-amplifier
 detector and extraction evidence is needed.
 
 For LRS2, successful `product.channels` contains the complete UV, Orange, Red,

@@ -72,12 +72,13 @@ class Exposure:
 
 @dataclass(frozen=True)
 class Observation:
-    """The archive evidence and basic metadata for one observation.
+    """The source evidence and basic metadata for one observation.
 
-    ``members`` contains every regular archive member. ``frames`` filters that
-    inventory to FITS-looking members, including malformed FITS names so their
-    presence remains inspectable. Grouping methods use only members with a
-    parsed :class:`~hetquicklook.discovery.RawFrameIdentity`.
+    ``members`` contains every regular file in an archive or observation
+    directory. ``frames`` filters that inventory to FITS-looking members,
+    including malformed FITS names so their presence remains inspectable.
+    Grouping methods use only members with a parsed
+    :class:`~hetquicklook.discovery.RawFrameIdentity`.
     """
 
     discovered: DiscoveredObservation

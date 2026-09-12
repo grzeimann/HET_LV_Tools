@@ -1,4 +1,4 @@
-"""Filesystem discovery for observation archives."""
+"""Filesystem discovery for observation archives and directories."""
 
 from __future__ import annotations
 
@@ -20,10 +20,10 @@ _DATE_PATTERNS = (re.compile(r"^(\d{8})$"), re.compile(r"^(\d{4})[-_](\d{2})[-_]
 
 @dataclass(frozen=True)
 class DiscoveredObservation:
-    """One observation archive found on disk.
+    """One observation archive or directory found on disk.
 
-    The object records only what discovery can establish without opening the
-    archive. Missing companion files do not invalidate this observation.
+    The object records only what discovery can establish without loading FITS
+    arrays. Missing companion files do not invalidate this observation.
     """
 
     archive_path: Path
@@ -53,6 +53,8 @@ class DiscoveredObservation:
     def storage_backend(self) -> str:
         """Return the small storage classification needed to load members."""
 
+        if self.archive_path.is_dir():
+            return "directory"
         return "date_tar" if self.outer_tar_member is not None else "tar"
 
 
@@ -104,13 +106,14 @@ class RawFrameIdentity:
 
 @dataclass(frozen=True)
 class ArchiveMember:
-    """One literal regular file member found in an observation archive.
+    """One literal regular file member found in an observation source.
 
-    ``archive_path`` is the physical outer tar path. For a nested Corral
-    layout, ``outer_tar_member`` identifies the inner observation tar and
-    ``member_name`` identifies the FITS member within it. ``identity`` is
-    ``None`` for non-FITS or malformed names; the member remains in the
-    inventory so that the filesystem evidence is not hidden.
+    ``archive_path`` is the physical outer tar path or observation-directory
+    path. For a nested Corral layout, ``outer_tar_member`` identifies the inner
+    observation tar and ``member_name`` identifies the FITS member within it.
+    For a directory layout, ``member_name`` is relative to ``archive_path``.
+    ``identity`` is ``None`` for non-FITS or malformed names; the member
+    remains in the inventory so that the filesystem evidence is not hidden.
     """
 
     archive_path: Path
@@ -202,15 +205,41 @@ def _archive_member(
     )
 
 
+def _directory_member(
+    observation_path: Path,
+    member_path: Path,
+) -> ArchiveMember:
+    member_name = member_path.relative_to(observation_path).as_posix()
+    identity, parse_error = _identity_parse(member_name)
+    return ArchiveMember(
+        archive_path=observation_path,
+        member_name=member_name,
+        size=member_path.stat().st_size,
+        identity=identity,
+        parse_error=parse_error,
+    )
+
+
 def inventory_members(observation: DiscoveredObservation) -> tuple[ArchiveMember, ...]:
     """Inventory literal regular members without loading FITS detector data.
 
-    Direct archives are opened once and nested Corral archives are opened at
-    both tar levels. Results are sorted by literal member names for stable
-    inspection and testing.
+    Direct archives are opened once, nested Corral archives are opened at both
+    tar levels, and HET observation directories are walked recursively.
+    Results are sorted by literal member names for stable inspection and
+    testing.
     """
 
     archive_path = observation.archive_path
+    if observation.storage_backend == "directory":
+        if observation.outer_tar_member is not None:
+            raise ValueError("directory observations cannot have an outer tar member")
+        members = [
+            _directory_member(archive_path, member_path)
+            for member_path in archive_path.rglob("*")
+            if member_path.is_file()
+        ]
+        return tuple(sorted(members, key=lambda item: item.member_name))
+
     with tarfile.open(archive_path, mode="r:*") as outer:
         if observation.outer_tar_member is None:
             members = [
@@ -319,13 +348,19 @@ def _is_archive(path: Path) -> bool:
     return any(path.name.lower().endswith(suffix) for suffix in _ARCHIVE_SUFFIXES)
 
 
+def _is_observation_directory(path: Path, instrument: Instrument) -> bool:
+    """Match the HET mountain observation-directory naming convention."""
+
+    return re.fullmatch(rf"{re.escape(instrument.value)}\d+", path.name, re.IGNORECASE) is not None
+
+
 def discover_observations(
     config: QuicklookConfig,
     *,
     instrument: Instrument | str | None = None,
     date: calendar_date | str | None = None,
 ) -> tuple[DiscoveredObservation, ...]:
-    """Discover observation archives below a configured root.
+    """Discover observation archives and HET observation directories below a configured root.
 
     Args:
         config: Filesystem configuration.
@@ -334,9 +369,9 @@ def discover_observations(
             ``YYYY-MM-DD``.
 
     Returns:
-        Observations sorted by observing date and archive path. Every returned
-        object corresponds to an archive that exists; no completeness check is
-        performed.
+        Observations sorted by observing date and source path. Every returned
+        object corresponds to an archive or directory that exists; no
+        completeness check is performed.
 
     Raises:
         ValueError: If ``date`` cannot be parsed.
@@ -375,6 +410,16 @@ def discover_observations(
                 continue
             for archive_path in sorted(instrument_dir.iterdir()):
                 if archive_path.is_file() and _is_archive(archive_path):
+                    observations.append(
+                        DiscoveredObservation(
+                            archive_path=archive_path,
+                            date=observed_date,
+                            instrument=observed_instrument,
+                        )
+                    )
+                elif archive_path.is_dir() and _is_observation_directory(
+                    archive_path, observed_instrument
+                ):
                     observations.append(
                         DiscoveredObservation(
                             archive_path=archive_path,

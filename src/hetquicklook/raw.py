@@ -1,4 +1,4 @@
-"""Small raw FITS loading boundary for tar-backed observations.
+"""Small raw FITS loading boundary for archive- and directory-backed observations.
 
 The implementation intentionally keeps discovery and physical loading
 separate. It follows the VIRUSFlow contract that the primary HDU contains the
@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 import io
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import tarfile
 from threading import RLock
 from collections.abc import Iterable, Iterator, Mapping
@@ -63,7 +63,7 @@ class HeaderReadResult:
 
 
 class RawFrameLoader:
-    """Load primary-HDU FITS data from direct or nested tar members."""
+    """Load primary-HDU FITS data from archives or observation directories."""
 
     def __init__(self) -> None:
         self._archives: dict[Path, tarfile.TarFile] = {}
@@ -129,6 +129,20 @@ class RawFrameLoader:
                 yield stream
             return
 
+        if path.is_dir():
+            if outer_tar_member is not None:
+                raise ValueError("directory members cannot have an outer tar member")
+            relative = PurePosixPath(tar_member)
+            if relative.is_absolute() or ".." in relative.parts:
+                raise ValueError(f"invalid directory member path: {tar_member!r}")
+            root = path.resolve()
+            member_path = (root / Path(*relative.parts)).resolve()
+            if root not in member_path.parents:
+                raise ValueError(f"directory member escapes observation path: {tar_member!r}")
+            with member_path.open("rb") as stream:
+                yield stream
+            return
+
         with self._archive_lock:
             if outer_tar_member is None:
                 archive = self._get_archive(path)
@@ -190,6 +204,16 @@ class RawFrameLoader:
             groups.setdefault((member.archive_path, member.outer_tar_member), []).append(member)
 
         for (path, nested_name), group in groups.items():
+            if path.is_dir():
+                if nested_name is not None:
+                    error = ValueError(
+                        "directory members cannot have an outer tar member"
+                    )
+                    for member in group:
+                        errors.setdefault(member.member_name, str(error))
+                else:
+                    self._read_headers_from_directory(path, group, headers, errors)
+                continue
             try:
                 with tarfile.open(path, mode="r:*") as outer:
                     if nested_name is None:
@@ -236,6 +260,23 @@ class RawFrameLoader:
                 finally:
                     stream.close()
             except (OSError, ValueError, KeyError, tarfile.TarError, fits.VerifyError) as error:
+                errors[member.member_name] = str(error)
+
+    def _read_headers_from_directory(
+        self,
+        observation_path: Path,
+        members: Iterable[ArchiveMember],
+        headers: dict[str, dict[str, Any]],
+        errors: dict[str, str],
+    ) -> None:
+        for member in members:
+            try:
+                with self._open_payload(
+                    observation_path, member.member_name, outer_tar_member=None
+                ) as stream:
+                    with fits.open(stream, memmap=False, lazy_load_hdus=True) as hdul:
+                        headers[member.member_name] = dict(hdul[0].header)
+            except (OSError, ValueError, KeyError, fits.VerifyError) as error:
                 errors[member.member_name] = str(error)
 
     def load(

@@ -65,7 +65,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     parser = argparse.ArgumentParser(prog="hetquicklook")
     subparsers = parser.add_subparsers(dest="command", required=True)
-    discover = subparsers.add_parser("discover", help="list observation archives")
+    discover = subparsers.add_parser("discover", help="list observations")
     discover.add_argument("root", help="root containing date directories")
     discover.add_argument("--instrument", choices=[item.value for item in Instrument])
     discover.add_argument("--date", help="date as YYYYMMDD or YYYY-MM-DD")
@@ -73,7 +73,7 @@ def build_parser() -> argparse.ArgumentParser:
     discover.add_argument(
         "--inventory",
         action="store_true",
-        help="include literal archive members and parsed identities",
+        help="include literal source members and parsed identities",
     )
     discover.set_defaults(handler=_discover_command)
     return parser

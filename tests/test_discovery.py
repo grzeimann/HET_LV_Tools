@@ -50,3 +50,20 @@ def test_discovery_reports_nested_corral_virus_observations(tmp_path: Path) -> N
     assert len(observations) == 1
     assert observations[0].observation_id == "virus0000001"
     assert observations[0].outer_tar_member == "virus/virus0000001.tar"
+
+
+def test_discovery_reports_het_observation_directories(tmp_path: Path) -> None:
+    virus = tmp_path / "20260910" / "virus" / "virus0000001"
+    lrs2 = tmp_path / "20260910" / "lrs2" / "lrs20000001"
+    (virus / "exp01" / "virus").mkdir(parents=True)
+    (lrs2 / "exp01" / "lrs2").mkdir(parents=True)
+
+    observations = discover_observations(
+        QuicklookConfig(tmp_path), date="20260910"
+    )
+
+    assert [(item.instrument.value, item.observation_id) for item in observations] == [
+        ("lrs2", "lrs20000001"),
+        ("virus", "virus0000001"),
+    ]
+    assert all(item.storage_backend == "directory" for item in observations)

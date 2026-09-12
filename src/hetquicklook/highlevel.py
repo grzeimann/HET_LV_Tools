@@ -1,4 +1,4 @@
-"""Small interactive orchestration objects for archive-backed quick looks."""
+"""Small interactive orchestration objects for filesystem-backed quick looks."""
 
 from __future__ import annotations
 

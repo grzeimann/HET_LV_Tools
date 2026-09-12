@@ -3,6 +3,7 @@ from pathlib import Path
 import tarfile
 
 import numpy as np
+import pytest
 from astropy.io import fits
 
 from hetquicklook import QuicklookConfig, discover_observations, load_observation
@@ -58,3 +59,46 @@ def test_observation_represents_partial_components_and_groups_exposures(
     assert observation.frames_for(frame_type="twi")[0].identity is not None
     loaded = observation.load_frames(exposure_id="20260910T010202.2")
     np.testing.assert_array_equal(loaded[0].data, np.array([[2]], dtype=np.uint16))
+
+
+@pytest.mark.parametrize(
+    ("instrument", "observation_id", "amplifier_token"),
+    (
+        ("virus", "virus0000001", "074LL"),
+        ("lrs2", "lrs20000001", "056LL"),
+    ),
+)
+def test_observation_loads_het_directory_layout(
+    tmp_path: Path,
+    instrument: str,
+    observation_id: str,
+    amplifier_token: str,
+) -> None:
+    root = tmp_path / "root"
+    observation_path = root / "20260910" / instrument / observation_id
+    member_path = (
+        observation_path
+        / "exp01"
+        / instrument
+        / f"20260910T010101.1_{amplifier_token}_twi.fits"
+    )
+    member_path.parent.mkdir(parents=True)
+    data = np.array([[3, 4]], dtype=np.uint16)
+    member_path.write_bytes(_fits_bytes(data, "skyflat"))
+
+    discovered = discover_observations(
+        QuicklookConfig(root), instrument=instrument, date="20260910"
+    )[0]
+    observation = load_observation(discovered)
+
+    assert discovered.storage_backend == "directory"
+    assert [member.member_name for member in observation.members] == [
+        f"exp01/{instrument}/20260910T010101.1_{amplifier_token}_twi.fits"
+    ]
+    exposure = observation.exposure_for("20260910T010101.1")
+    loaded = exposure.load_frames()[0]
+    np.testing.assert_array_equal(loaded.data, data)
+    assert loaded.path == str(observation_path)
+    assert loaded.tar_member == (
+        f"exp01/{instrument}/20260910T010101.1_{amplifier_token}_twi.fits"
+    )
