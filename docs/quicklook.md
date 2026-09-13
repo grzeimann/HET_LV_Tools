@@ -38,11 +38,23 @@ standard-star workflow, and all other frame types use the target workflow for
 spatial inspection. An expert may use `exposure.quicklook(kind="flat")`,
 `kind="standard"`, or `kind="target"` when an explicit override is appropriate.
 
-If the selected UT date contains no classified flat, `QuicklookSite.night()`
-also searches the previous UT date for classified flats with observation times
-from 17:00 UT through 23:59:59 UT. Those previous-evening flats are added to
-the trace candidate pool for current-date standard-star and target quick looks;
-they are not added to the displayed exposure table.
+If the selected UT date contains no flat frame, `QuicklookSite.night()` also
+searches the previous UT date for flat frames with observation times from
+17:00 UT through 23:59:59 UT. The filename frame type is used for this
+fallback even when an archive's `OBJECT` label is missing or unfamiliar;
+recognized LRS2 labels retain their slot-specific calibration rules. These
+previous-evening flats are added to the trace candidate pool for current-date
+standard-star and target quick looks; they are not added to the displayed
+exposure table.
+
+When a date is supplied, as it is through `QuicklookSite.night()`, discovery
+only enters the selected `ROOT/DATE` tree. If the selected tree has no flat
+frame, the optional fallback enters `ROOT/DATE-1` as well. The root itself is
+checked and only the supported date-directory or date-archive paths are
+probed; files from other dates are not recursively scanned. Each selected
+date is then inventoried fully so the exposure table can read metadata from
+its FITS members. Calling `discover_observations()` without a date
+intentionally discovers all dates.
 
 VIRUS processing is sequential. For diagnostics, the quick-look call accepts
 `timing=True` and `memory_check=True`. The resulting per-IFU diagnostics are
@@ -51,7 +63,7 @@ available at `product.ifus["074"].diagnostics`.
 Archive- or directory-backed quick looks use the prepared detector's central
 200-column window for flat, standard-star, and target exposures. Flats are
 traced from their own local window; standards and targets use the cached local
-trace from a suitable classified flat. Extraction is collapsed immediately, so
+trace from a suitable flat frame. Extraction is collapsed immediately, so
 the default product does not retain raw detector arrays or extracted spectra.
 Use `exposure.quicklook(detailed_evidence=True)` when detailed per-amplifier
 detector and extraction evidence is needed.

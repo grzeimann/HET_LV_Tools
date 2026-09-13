@@ -1,4 +1,5 @@
 from datetime import date, datetime
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -216,6 +217,70 @@ def test_night_uses_previous_evening_flats_when_current_date_has_none(
         candidate.exposure_id
         for candidate, _ in night._trace_provider._candidates
     ] == ["science", "late-flat"]
+
+
+def test_night_uses_previous_evening_unclassified_flat_frame(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    current = _observation(
+        tmp_path,
+        "current",
+        [("science", "sci", "target")],
+        observation_date=date(2026, 5, 12),
+    )
+    previous = _observation(
+        tmp_path,
+        "previous",
+        [("flat", "flt", "site_specific_flat")],
+        observation_date=date(2026, 5, 11),
+        observation_times=(datetime(2026, 5, 11, 22, 54),),
+    )
+    previous_exposure = replace(
+        previous.exposures[0], classification=ExposureClassification()
+    )
+    previous = replace(previous, exposures=(previous_exposure,))
+    discovered_by_date = {
+        date(2026, 5, 12): (current.discovered,),
+        date(2026, 5, 11): (previous.discovered,),
+    }
+    loaded_by_observation = {
+        item.discovered.observation_id: item for item in (current, previous)
+    }
+
+    monkeypatch.setattr(
+        highlevel,
+        "discover_observations",
+        lambda config, *, instrument, date: discovered_by_date[
+            highlevel._calendar_date(date)
+        ],
+    )
+    monkeypatch.setattr(
+        highlevel,
+        "load_observation",
+        lambda item, **kwargs: loaded_by_observation[item.observation_id],
+    )
+
+    site = QuicklookSite(raw_roots={"lrs2": tmp_path}, trace_root=tmp_path)
+    night = site.night("20260512", instrument="lrs2")
+
+    assert [
+        candidate.exposure_id
+        for candidate, _ in night._fallback_calibration_candidates
+    ] == ["flat"]
+
+
+def test_previous_evening_flat_uses_exposure_id_when_header_date_disagrees(
+    tmp_path: Path,
+) -> None:
+    exposure = _observation(
+        tmp_path,
+        "20260511T225400.0",
+        [("20260511T225400.0", "flt", "site_specific_flat")],
+        observation_date=date(2026, 5, 11),
+        observation_times=(datetime(2026, 5, 12, 22, 54),),
+    ).exposures[0]
+
+    assert highlevel._is_previous_evening_flat(exposure, date(2026, 5, 11))
 
 
 def test_night_does_not_search_previous_date_when_current_flat_exists(

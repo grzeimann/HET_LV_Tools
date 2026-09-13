@@ -69,10 +69,14 @@ def _display_value(value: Any, *, max_items: int | None = None) -> str:
     return str(value)
 
 
-def _classification_label(classification: ExposureClassification) -> str:
+def _classification_label(
+    classification: ExposureClassification,
+    *,
+    flat_frame: bool = False,
+) -> str:
     """Return the user-facing label without reimplementing classification."""
 
-    if classification.quicklook_kind == "flat":
+    if flat_frame or classification.quicklook_kind == "flat":
         return "flat"
     if classification.standard_star is True:
         return "standard"
@@ -87,6 +91,14 @@ def _calibration_label(classification: ExposureClassification) -> str | None:
     if classification.standard_star is True and classification.standard_target:
         return f"standard: {classification.standard_target}"
     return None
+
+
+def _is_flat_frame(exposure: Exposure) -> bool:
+    """Return whether all parsed members are encoded as flat frames."""
+
+    return {
+        str(value).strip().casefold() for value in exposure.metadata.frame_types
+    } == {"flt"}
 
 
 def _calendar_date(value: str | date) -> date:
@@ -105,21 +117,44 @@ def _calendar_date(value: str | date) -> date:
     raise ValueError(f"Unsupported date format: {value!r}")
 
 
+def _encoded_exposure_time(exposure: Exposure) -> datetime | None:
+    """Return a timestamp from the standard UTC exposure-ID spelling."""
+
+    value = str(exposure.exposure_id).strip()
+    if len(value) < 10 or value[8].upper() != "T" or not value[:8].isdigit():
+        return None
+    try:
+        return workflows._as_datetime(value, date.min)
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
 def _is_previous_evening_flat(exposure: Exposure, previous_date: date) -> bool:
     """Return whether an exposure is a flat taken after 17 UT."""
 
-    if exposure.classification.quicklook_kind != "flat":
+    # The frame-type token is present in every parsed filename and is more
+    # reliable for this fallback than an optional or site-specific OBJECT
+    # spelling.  Keep the normal classification for display and provenance.
+    if not _is_flat_frame(exposure):
         return False
-    observation_time = exposure.metadata.observation_time or exposure.exposure_id
-    normalized = workflows._as_datetime(observation_time, previous_date)
+    # Some archive headers expose a creation or local-date value under DATE.
+    encoded_time = _encoded_exposure_time(exposure)
+    if encoded_time is not None:
+        # The exposure ID records the UTC start used by the archive naming
+        # convention and avoids treating a long exposure's end/header time as
+        # the calibration start.
+        normalized = encoded_time
+    else:
+        observation_time = exposure.metadata.observation_time
+        normalized = workflows._as_datetime(observation_time, previous_date)
     start = datetime.combine(previous_date, _PREVIOUS_NIGHT_CALIBRATION_START_UT)
     end = datetime.combine(previous_date + timedelta(days=1), clock_time.min)
     return start <= normalized < end
 
 
-def _has_classified_flat(observations: tuple[Observation, ...]) -> bool:
+def _has_flat_frame(observations: tuple[Observation, ...]) -> bool:
     return any(
-        exposure.classification.quicklook_kind == "flat"
+        _is_flat_frame(exposure)
         for observation in observations
         for exposure in observation.exposures
     )
@@ -145,7 +180,9 @@ def _exposure_row(row: int, observation: Observation, exposure: Exposure) -> dic
         "UTC/time": metadata.observation_time,
         "Frame type": metadata.frame_type or metadata.frame_types,
         "OBJECT": metadata.object_name,
-        "Quick-look kind": _classification_label(classification),
+        "Quick-look kind": _classification_label(
+            classification, flat_frame=_is_flat_frame(exposure)
+        ),
         "Calibration / standard": _calibration_label(classification),
         "IFU slot": physical_slots,
         "Exposure time [s]": metadata.exposure_time_s,
@@ -218,7 +255,7 @@ class QuicklookSite:
     ) -> tuple[tuple[Exposure, date], ...]:
         """Find previous-date evening flats only when the current date has none."""
 
-        if _has_classified_flat(current_observations):
+        if _has_flat_frame(current_observations):
             return ()
 
         previous_date = observed_date - timedelta(days=1)
@@ -462,11 +499,15 @@ class QuicklookExposure:
 
     @property
     def kind(self) -> str:
-        return _classification_label(self.classification)
+        return _classification_label(
+            self.classification, flat_frame=_is_flat_frame(self.raw_exposure)
+        )
 
     def _resolve_kind(self, kind: str | None) -> str:
         if kind is None or str(kind).strip().casefold() in {"", "auto"}:
-            if self.classification.quicklook_kind == "flat":
+            if self.classification.quicklook_kind == "flat" or _is_flat_frame(
+                self.raw_exposure
+            ):
                 return "flat"
             if self.classification.standard_star is True:
                 return "standard"

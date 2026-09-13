@@ -533,7 +533,16 @@ class _QuickTraceProvider:
         ] = []
         for candidate, fallback_date in self._candidates:
             classification = candidate.classification
-            if classification.quicklook_kind != "flat":
+            # A flat frame is identified in the filename, while OBJECT is
+            # optional metadata and varies between archive sources.  Retain
+            # classified flats' slot restriction, but allow an otherwise
+            # valid flat exposure to supply a trace when its label is absent
+            # or uses an unrecognized spelling.
+            is_flat_frame = {
+                str(value).strip().casefold()
+                for value in candidate.metadata.frame_types
+            } == {"flt"}
+            if classification.quicklook_kind != "flat" and not is_flat_frame:
                 continue
             if classification.applicable_ifu_slots and slot not in {
                 str(value).strip().zfill(3)
@@ -571,7 +580,7 @@ class _QuickTraceProvider:
             raise QuicklookError(
                 f"Quick-look failed for exposure {target_exposure.exposure_id}, "
                 f"amplifier {target_token}, stage: flat resolution, reason: "
-                "no suitable classified flat exists"
+                "no suitable flat frame exists"
             )
         matches.sort(key=lambda item: item[:4])
         return matches[0][4], matches[0][5]

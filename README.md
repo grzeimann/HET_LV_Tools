@@ -93,11 +93,13 @@ extracted spectra are needed for detailed inspection. See the
 [interactive quick-start guide](docs/quicklook.md) for evidence retention,
 instrument-specific products, and advanced inspection.
 
-When the selected UT date has no classified flat, the high-level night lookup
-also searches the previous UT date for classified flats taken from 17:00 UT up
-to midnight. These flats are used as trace candidates for current-date
-standard-star and target quick looks; the displayed night inventory remains
-limited to the selected UT date.
+When the selected UT date has no flat frame, the high-level night lookup also
+searches the previous UT date for flat frames taken from 17:00 UT up to
+midnight. The filename frame type is used for this fallback even when an
+archive's `OBJECT` label is missing or unfamiliar; recognized LRS2 labels keep
+their slot-specific calibration rules. These flats are used as trace
+candidates for current-date standard-star and target quick looks; the
+displayed night inventory remains limited to the selected UT date.
 
 For the detector-to-fiber workflow and result objects, see the [quick-look
 workflow guide](docs/quicklook.md) and the notebook.

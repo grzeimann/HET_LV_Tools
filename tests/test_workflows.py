@@ -68,6 +68,62 @@ def test_ldls_workflow_produces_spatial_image() -> None:
     assert result.image.tolist() == [[2.0, 3.0]]
 
 
+def test_trace_provider_accepts_unclassified_flat_frame(
+    tmp_path: Path,
+) -> None:
+    target_identity = PhysicalAmplifierIdentity(
+        instrument=Instrument.LRS2,
+        ifu_slot="066",
+        amplifier="LL",
+        ifuid="7002",
+        specid="502",
+    )
+    target_frame = ArchiveMember(
+        archive_path=tmp_path / "target.tar",
+        member_name="target_066LL_sci.fits",
+        size=1,
+        identity=RawFrameIdentity("target", "066LL", "sci"),
+    )
+    flat_frame = ArchiveMember(
+        archive_path=tmp_path / "flat.tar",
+        member_name="flat_066LL_flt.fits",
+        size=1,
+        identity=RawFrameIdentity("flat", "066LL", "flt"),
+    )
+    target = Exposure(
+        exposure_id="target",
+        frames=(target_frame,),
+        metadata=ExposureMetadata(
+            exposure_id="target", frame_types=("sci",), frame_class="science"
+        ),
+        classification=ExposureClassification(),
+        physical_identities={target_frame.member_name: target_identity},
+    )
+    flat = Exposure(
+        exposure_id="flat",
+        frames=(flat_frame,),
+        metadata=ExposureMetadata(
+            exposure_id="flat", frame_types=("flt",), frame_class="calibration"
+        ),
+        classification=ExposureClassification(),
+        physical_identities={flat_frame.member_name: target_identity},
+    )
+
+    provider = workflows._QuickTraceProvider(
+        ((flat, date(2026, 5, 11)),), trace_root=tmp_path
+    )
+
+    selected, selected_frame = provider._select_candidate(
+        target,
+        target_frame,
+        target_identity,
+        at=date(2026, 5, 12),
+    )
+
+    assert selected is flat
+    assert selected_frame is flat_frame
+
+
 def _dense_topology() -> FiberTopology:
     detector_columns = 220
     fiber_ids = ("f0", "f1", "f2")

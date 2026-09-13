@@ -16,6 +16,7 @@ from .instrument import Instrument
 
 _ARCHIVE_SUFFIXES = (".tar", ".tar.gz", ".tgz", ".tar.bz2", ".tar.xz")
 _DATE_PATTERNS = (re.compile(r"^(\d{8})$"), re.compile(r"^(\d{4})[-_](\d{2})[-_](\d{2})$"))
+_DATE_NAME_FORMATS = ("%Y%m%d", "%Y-%m-%d", "%Y_%m_%d")
 
 
 @dataclass(frozen=True)
@@ -299,6 +300,22 @@ def _date_directories(root: Path) -> Iterator[tuple[Path, calendar_date]]:
                 yield path, parsed
 
 
+def _selected_date_directories(
+    root: Path, selected_date: calendar_date
+) -> Iterator[tuple[Path, calendar_date]]:
+    """Probe supported date-directory names without listing the root."""
+
+    if not root.is_dir():
+        return
+    names = sorted(
+        {selected_date.strftime(format_string) for format_string in _DATE_NAME_FORMATS}
+    )
+    for name in names:
+        path = root / name
+        if path.is_dir():
+            yield path, selected_date
+
+
 def _date_archives(root: Path) -> Iterator[tuple[Path, calendar_date]]:
     """Yield date-tar containers from the Corral layout."""
 
@@ -310,6 +327,22 @@ def _date_archives(root: Path) -> Iterator[tuple[Path, calendar_date]]:
         parsed = _parse_date(path.name[:-4])
         if parsed is not None:
             yield path, parsed
+
+
+def _selected_date_archives(
+    root: Path, selected_date: calendar_date
+) -> Iterator[tuple[Path, calendar_date]]:
+    """Probe supported date-archive names without listing the root."""
+
+    if not root.is_dir():
+        return
+    names = sorted(
+        {selected_date.strftime(format_string) for format_string in _DATE_NAME_FORMATS}
+    )
+    for name in names:
+        path = root / f"{name}.tar"
+        if path.is_file():
+            yield path, selected_date
 
 
 def _is_nested_virus_archive(name: str) -> bool:
@@ -387,9 +420,12 @@ def discover_observations(
             raise ValueError(f"Unsupported date format: {date!r}")
 
     observations: list[DiscoveredObservation] = []
-    for date_dir, observed_date in _date_directories(config.root):
-        if selected_date is not None and observed_date != selected_date:
-            continue
+    date_directories = (
+        _date_directories(config.root)
+        if selected_date is None
+        else _selected_date_directories(config.root, selected_date)
+    )
+    for date_dir, observed_date in date_directories:
         if selected_instrument:
             instrument_dirs = [
                 path
@@ -427,9 +463,12 @@ def discover_observations(
                             instrument=observed_instrument,
                         )
                     )
-    for date_archive, observed_date in _date_archives(config.root):
-        if selected_date is not None and observed_date != selected_date:
-            continue
+    date_archives = (
+        _date_archives(config.root)
+        if selected_date is None
+        else _selected_date_archives(config.root, selected_date)
+    )
+    for date_archive, observed_date in date_archives:
         if selected_instrument not in (None, Instrument.VIRUS):
             continue
         observations.extend(_discover_nested_observations(date_archive, observed_date))

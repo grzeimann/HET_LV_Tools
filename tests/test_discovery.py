@@ -2,6 +2,8 @@ from pathlib import Path
 import io
 import tarfile
 
+import hetquicklook.discovery as discovery
+import pytest
 from hetquicklook.config import QuicklookConfig
 from hetquicklook.discovery import discover_observations
 
@@ -33,6 +35,27 @@ def test_discovery_can_filter_by_date_and_instrument(tmp_path: Path) -> None:
     )
 
     assert observations[0].archive_path == archive
+
+
+def test_filtered_discovery_probes_only_the_requested_date(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    requested = tmp_path / "20260910" / "virus"
+    requested.mkdir(parents=True)
+    archive = requested / "one.tar"
+    archive.touch()
+    (tmp_path / "20200101" / "gc1").mkdir(parents=True)
+
+    def fail_root_scan(root: Path):
+        raise AssertionError("date-filtered discovery must not list all root dates")
+
+    monkeypatch.setattr(discovery, "_date_directories", fail_root_scan)
+    monkeypatch.setattr(discovery, "_date_archives", fail_root_scan)
+    observations = discover_observations(
+        QuicklookConfig(tmp_path), instrument="virus", date="20260910"
+    )
+
+    assert [item.archive_path for item in observations] == [archive]
 
 
 def test_discovery_reports_nested_corral_virus_observations(tmp_path: Path) -> None:
