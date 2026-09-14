@@ -61,9 +61,9 @@ print(observation.exposure_ids)
 
 For routine notebook use, configure the raw roots once, then choose a night,
 select an exposure from its compact HTML inventory, and display the instrument
-quick look. In a source or editable installation, dated trace resources are
-resolved from this repository by default; pass `trace_root=...` to
-`QuicklookSite` when using an external trace deployment:
+quick look. The dated trace resources shipped with the package are used by
+default; pass `trace_root=...` to `QuicklookSite` when using an external trace
+deployment:
 
 ```python
 from hetquicklook import QuicklookSite
@@ -152,9 +152,10 @@ containing multiple exposure IDs. It does not infer completeness during
 discovery. The discovery layer recognizes `.tar`, `.tar.gz`, `.tgz`, `.tar.bz2`,
 and `.tar.xz` archives.
 
-Static VIRUS and LRS2 fiber-position resources are packaged with
-`hetquicklook`. Dated detector traces are supplied through a trace root with
-the following structure:
+Static VIRUS and LRS2 fiber-position resources and the dated detector traces
+are packaged with `hetquicklook`. The high-level API uses the packaged traces
+by default. An alternate trace root can be supplied with the following
+structure:
 
 ```text
 TRACE_ROOT/

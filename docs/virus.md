@@ -16,8 +16,9 @@ hetquicklook/resources/virus/
 ```
 
 `VirusTopologyLoader` applies the established IFU-specific corrections,
-amplifier slices, extracted-spectrum reversal, and focal-plane parsing. Dated
-detector traces remain external calibration state:
+amplifier slices, extracted-spectrum reversal, and focal-plane parsing. The
+high-level `QuicklookSite` uses the dated traces packaged with `hetquicklook`.
+The lower-level loader accepts an alternate external trace root when needed:
 
 ```python
 from hetquicklook import VirusTopologyLoader

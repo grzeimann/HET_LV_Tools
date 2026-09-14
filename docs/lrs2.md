@@ -24,6 +24,8 @@ LRS2_R_FR_mapping.txt
 
 `LRS2FiberPositionLoader` reads the established five-line-header format and
 returns 140 positions per amplifier using the supplied channel/amp slices and
-reversal. LRS2 dated traces use the shared external
+reversal. The high-level `QuicklookSite` uses the dated traces packaged with
+`hetquicklook`; an external trace root can be supplied when needed. LRS2 dated
+traces use the shared
 `Fiber_Locations/<YYYYMMDD>/fiber_loc_<SPECID>_<IFUSLOT>_<IFUID>_<AMP>.txt`
 resolver.

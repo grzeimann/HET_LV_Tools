@@ -96,10 +96,10 @@ lower-level numerical workflows remain useful when an expert needs direct
 control over a prepared detector array and `FiberTopology`; their richer
 in-memory evidence options remain available for direct inspection.
 
-`QuicklookSite` resolves the repository's dated `Fiber_Locations` tree from
-the installed package location, so the notebook working directory does not
-affect normal trace lookup. An explicit `trace_root` may still be supplied for
-an alternate external trace deployment. Calling `LRS2Night.update()` rediscovers
+`QuicklookSite` resolves the packaged dated `Fiber_Locations` tree from the
+installed package location, so the notebook working directory does not affect
+normal trace lookup. An explicit `trace_root` may still be supplied for an
+alternate external trace deployment. Calling `LRS2Night.update()` rediscovers
 the same date and instrument through that site, reloads the observation
 metadata, and refreshes the table and exposure wrappers in place. Its return
 value is the same night object, so evaluating `LRS2Night.update()` in a

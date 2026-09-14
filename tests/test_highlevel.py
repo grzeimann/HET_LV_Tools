@@ -124,7 +124,8 @@ def test_site_default_trace_root_is_independent_of_working_directory(
 
     site = QuicklookSite(raw_roots={"lrs2": tmp_path})
 
-    assert site.trace_root == Path(highlevel.__file__).resolve().parents[2]
+    assert site.trace_root == Path(highlevel.__file__).resolve().parent / "resources"
+    assert (site.trace_root / "Fiber_Locations").is_dir()
 
 
 def test_night_update_refreshes_the_existing_inventory(

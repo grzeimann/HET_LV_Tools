@@ -30,7 +30,11 @@ package-dir = { "" = "src" }
 where = ["src"]
 
 [tool.setuptools.package-data]
-"hetquicklook.resources" = ["lrs2/*.txt", "virus/*.txt"]
+"hetquicklook.resources" = [
+    "lrs2/*.txt",
+    "virus/*.txt",
+    "Fiber_Locations/*/*.txt",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

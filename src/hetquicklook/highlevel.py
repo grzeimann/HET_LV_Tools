@@ -40,13 +40,13 @@ _PREVIOUS_NIGHT_CALIBRATION_START_UT = clock_time(hour=17)
 
 
 def _package_trace_root() -> Path:
-    """Return the package/repository root containing ``Fiber_Locations``."""
+    """Return the installed package data root containing ``Fiber_Locations``."""
 
-    # In the supported source and editable installations this module lives at
-    # ``<repository>/src/hetquicklook/highlevel.py``.  Resolve from the
-    # package location so notebook and process working directories do not
-    # affect dated trace lookup.
-    return Path(__file__).resolve().parents[2]
+    # Dated traces are shipped below the package's resources directory.  This
+    # remains valid for both source/editable installations and regular wheel
+    # installs; deriving the path from ``parents[2]`` only works in a source
+    # checkout and points above ``site-packages`` after a wheel install.
+    return Path(__file__).resolve().parent / "resources"
 
 
 def _display_value(value: Any, *, max_items: int | None = None) -> str:

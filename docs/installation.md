@@ -22,10 +22,11 @@ Run the tests with:
 python -m pytest
 ```
 
-The static VIRUS and LRS2 topology files are included as package data under
-`hetquicklook/resources/`. Their lookup uses `importlib.resources`, so callers
-can import the package from any working directory. Dated trace references stay
-outside the package and are supplied through the topology loader:
+The static VIRUS and LRS2 topology files, along with the dated
+`Fiber_Locations` trace tree used by the high-level quick-look API, are
+included as package data under `hetquicklook/resources/`. Their lookup is
+independent of the caller's working directory. An alternate dated trace tree
+can still be supplied explicitly to the topology loader:
 
 ```python
 from hetquicklook import VirusTopologyLoader
