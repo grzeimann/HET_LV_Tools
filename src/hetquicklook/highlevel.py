@@ -15,9 +15,18 @@ from .algorithms.collapse import DEFAULT_COLLAPSE_COLUMNS, DEFAULT_COLLAPSE_STAT
 from . import workflows
 from .classification import ExposureClassification, StandardStarCatalog
 from .config import QuicklookConfig
-from .discovery import DiscoveredObservation, discover_observations
+from .discovery import (
+    DiscoveredObservation,
+    discover_observation,
+    discover_observations,
+)
 from .instrument import Instrument
-from .observation import Exposure, Observation, load_observation
+from .observation import (
+    Exposure,
+    Observation,
+    load_observation,
+    load_selected_exposure,
+)
 from .raw import RawFrameLoader
 
 
@@ -307,6 +316,77 @@ class QuicklookSite:
             _fallback_calibration_candidates=fallback_candidates,
         )
 
+    def exposure(
+        self,
+        quicklook_date: str | date,
+        *,
+        instrument: Instrument | str,
+        quicklook_observation: str,
+        quicklook_exposure: str | None = None,
+        flat_date: str | date,
+        flat_observation: str,
+        flat_exposure: str,
+    ) -> "QuicklookExposure":
+        """Build one targeted quick-look exposure and its explicit flat.
+
+        This path resolves only the named target and flat observations and
+        reads only the selected target and flat exposures. If
+        ``quicklook_exposure`` is omitted, the first encoded exposure in the
+        target observation is selected. VIRUS amplifiers whose flat does not
+        match the target physical identity remain in the result as unavailable
+        evidence.
+        """
+
+        parsed = Instrument.from_value(instrument)
+        config = self.config_for(parsed)
+        target_discovered = discover_observation(
+            config,
+            instrument=parsed,
+            date=quicklook_date,
+            observation_id=quicklook_observation,
+        )
+        flat_discovered = discover_observation(
+            config,
+            instrument=parsed,
+            date=flat_date,
+            observation_id=flat_observation,
+        )
+        target_observation = load_selected_exposure(
+            target_discovered,
+            quicklook_exposure,
+            standard_catalog=self.standard_catalog,
+        )
+        flat_observation_data = load_selected_exposure(
+            flat_discovered,
+            flat_exposure,
+            standard_catalog=self.standard_catalog,
+        )
+        target_exposure = target_observation.exposures[0]
+        selected_flat = flat_observation_data.exposures[0]
+        if not _is_flat_frame(selected_flat):
+            raise ValueError(
+                f"Selected flat exposure {selected_flat.exposure_id!r} in "
+                f"{flat_observation!r} is not a flat frame"
+            )
+        trace_provider = workflows._QuickTraceProvider(
+            ((selected_flat, flat_observation_data.discovered.date),),
+            trace_root=self.trace_root,
+            require_complete_flat_component=parsed is Instrument.LRS2,
+        )
+        context = _QuicklookContext(
+            site=self,
+            instrument=parsed,
+            trace_provider=trace_provider,
+            allow_empty_virus_ifus=parsed is Instrument.VIRUS,
+        )
+        return QuicklookExposure(
+            night=None,
+            observation=target_observation,
+            raw_exposure=target_exposure,
+            row=None,
+            _context=context,
+        )
+
 
 @dataclass
 class QuicklookNight:
@@ -467,13 +547,24 @@ class QuicklookNight:
 
 
 @dataclass(frozen=True)
+class _QuicklookContext:
+    """Execution context for an exposure outside a full night inventory."""
+
+    site: QuicklookSite
+    instrument: Instrument
+    trace_provider: workflows._QuickTraceProvider
+    allow_empty_virus_ifus: bool = False
+
+
+@dataclass(frozen=True)
 class QuicklookExposure:
     """Thin interactive wrapper around one authoritative raw exposure."""
 
-    night: QuicklookNight
+    night: QuicklookNight | None
     observation: Observation
     raw_exposure: Exposure
-    row: int
+    row: int | None
+    _context: _QuicklookContext | None = field(default=None, repr=False, compare=False)
 
     @property
     def exposure(self) -> Exposure:
@@ -495,7 +586,11 @@ class QuicklookExposure:
 
     @property
     def instrument(self) -> Instrument:
-        return self.night.instrument
+        if self.night is not None:
+            return self.night.instrument
+        if self._context is not None:
+            return self._context.instrument
+        raise RuntimeError("quick-look exposure has no execution context")
 
     @property
     def kind(self) -> str:
@@ -551,9 +646,19 @@ class QuicklookExposure:
                 f"Exposure {self.exposure_id!r} has multiple or missing frame types; "
                 "pass frame_type explicitly."
             )
-        trace_root = self.night.site.trace_root
+        if self.night is not None:
+            site = self.night.site
+            trace_provider = self.night._trace_provider
+            allow_empty_ifus = False
+        elif self._context is not None:
+            site = self._context.site
+            trace_provider = self._context.trace_provider
+            allow_empty_ifus = self._context.allow_empty_virus_ifus
+        else:
+            raise RuntimeError("quick-look exposure has no execution context")
+        trace_root = site.trace_root
         configured_resource_root = (
-            self.night.site.resource_root if resource_root is None else resource_root
+            site.resource_root if resource_root is None else resource_root
         )
         active_loader = loader if loader is not None else RawFrameLoader()
         common = dict(
@@ -572,7 +677,7 @@ class QuicklookExposure:
             grid_padding_arcsec=grid_padding_arcsec,
             output_shape=output_shape,
             origin=origin,
-            trace_provider=self.night._trace_provider,
+            trace_provider=trace_provider,
             detailed_evidence=detailed_evidence,
         )
         try:
@@ -585,6 +690,7 @@ class QuicklookExposure:
                 common.update(
                     timing=timing,
                     memory_check=memory_check,
+                    allow_empty_ifus=allow_empty_ifus,
                 )
                 raw_result = workflows.run_virus_ifu_quicklooks(
                     self.raw_exposure,
@@ -631,7 +737,11 @@ class QuicklookIFU:
         """Return the spatial image composed from available amplifiers."""
 
         if self.raw_result.product is None:
-            raise ValueError("VIRUS IFU result has no composed spatial product")
+            unavailable = ", ".join(sorted(self.raw_result.unavailable_amplifiers))
+            detail = f" Unavailable amplifiers: {unavailable}." if unavailable else ""
+            raise ValueError(
+                "VIRUS IFU result has no composed spatial product." + detail
+            )
         return self.raw_result.product
 
     @property
@@ -797,8 +907,10 @@ class QuicklookProduct:
                 for slot, item in self.ifus.items()
                 if item.raw_result.product is not None
             }
-            if len(products) != len(self.ifus):
-                raise ValueError("VIRUS quick look contains an IFU without a spatial product")
+            if not products:
+                raise ValueError(
+                    "VIRUS quick look contains no IFU with a spatial product"
+                )
             return plot_virus_ifu_grid(
                 products,
                 title=title or f"VIRUS {self.kind} quick look",

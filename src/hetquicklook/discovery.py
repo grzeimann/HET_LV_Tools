@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date as calendar_date
+from datetime import date as calendar_date, datetime
 from pathlib import Path
 from pathlib import PurePosixPath
 import re
@@ -221,14 +221,27 @@ def _directory_member(
     )
 
 
-def inventory_members(observation: DiscoveredObservation) -> tuple[ArchiveMember, ...]:
+def inventory_members(
+    observation: DiscoveredObservation,
+    *,
+    exposure_id: str | None = None,
+) -> tuple[ArchiveMember, ...]:
     """Inventory literal regular members without loading FITS detector data.
 
     Direct archives are opened once, nested Corral archives are opened at both
     tar levels, and HET observation directories are walked recursively.
-    Results are sorted by literal member names for stable inspection and
-    testing.
+    When ``exposure_id`` is supplied, only parsed FITS members for that
+    exposure are retained. Results are sorted by literal member names for
+    stable inspection and testing.
     """
+
+    selected_exposure = None if exposure_id is None else str(exposure_id).strip()
+
+    def selected(member_name: str) -> bool:
+        if selected_exposure is None:
+            return True
+        identity, _ = _identity_parse(member_name)
+        return identity is not None and identity.exposure_id == selected_exposure
 
     archive_path = observation.archive_path
     if observation.storage_backend == "directory":
@@ -237,7 +250,7 @@ def inventory_members(observation: DiscoveredObservation) -> tuple[ArchiveMember
         members = [
             _directory_member(archive_path, member_path)
             for member_path in archive_path.rglob("*")
-            if member_path.is_file()
+            if member_path.is_file() and selected(member_path.name)
         ]
         return tuple(sorted(members, key=lambda item: item.member_name))
 
@@ -246,7 +259,7 @@ def inventory_members(observation: DiscoveredObservation) -> tuple[ArchiveMember
             members = [
                 _archive_member(archive_path, member, outer_tar_member=None)
                 for member in outer.getmembers()
-                if member.isfile()
+                if member.isfile() and selected(member.name)
             ]
         else:
             nested = outer.getmember(observation.outer_tar_member)
@@ -263,7 +276,7 @@ def inventory_members(observation: DiscoveredObservation) -> tuple[ArchiveMember
                         outer_tar_member=observation.outer_tar_member,
                     )
                     for member in inner.getmembers()
-                    if member.isfile()
+                    if member.isfile() and selected(member.name)
                 ]
     return tuple(sorted(members, key=lambda item: item.member_name))
 
@@ -480,3 +493,120 @@ def discover_observations(
         )
     )
     return tuple(observations)
+
+
+def discover_observation(
+    config: QuicklookConfig,
+    *,
+    instrument: Instrument | str,
+    date: calendar_date | str,
+    observation_id: str,
+) -> DiscoveredObservation:
+    """Resolve one named observation without discovering the surrounding night.
+
+    The resolver probes only the requested date, instrument, and observation.
+    It supports HET observation directories, direct observation archives, and
+    the nested VIRUS date-tar layout already recognized by
+    :func:`discover_observations`.
+    """
+
+    selected_instrument = Instrument.from_value(instrument)
+    if isinstance(date, datetime):
+        selected_date = date.date()
+    elif isinstance(date, calendar_date):
+        selected_date = date
+    else:
+        selected_date = _parse_date(str(date))
+    if selected_date is None:
+        raise ValueError(f"Unsupported date format: {date!r}")
+    requested_name = str(observation_id).strip()
+    if not requested_name:
+        raise ValueError("observation_id must not be empty")
+    for suffix in _ARCHIVE_SUFFIXES:
+        if requested_name.lower().endswith(suffix):
+            requested_name = requested_name[: -len(suffix)]
+            break
+
+    matches: list[DiscoveredObservation] = []
+
+    for date_dir, observed_date in _selected_date_directories(config.root, selected_date):
+        instrument_dir = date_dir / selected_instrument.value
+        if not instrument_dir.is_dir():
+            try:
+                instrument_dir = next(
+                    path
+                    for path in date_dir.iterdir()
+                    if path.is_dir()
+                    and path.name.casefold() == selected_instrument.value
+                )
+            except StopIteration:
+                continue
+
+        directory_candidate = instrument_dir / requested_name
+        if directory_candidate.is_dir() and _is_observation_directory(
+            directory_candidate, selected_instrument
+        ):
+            matches.append(
+                DiscoveredObservation(
+                    archive_path=directory_candidate,
+                    date=observed_date,
+                    instrument=selected_instrument,
+                )
+            )
+
+        for suffix in _ARCHIVE_SUFFIXES:
+            archive_candidate = instrument_dir / f"{requested_name}{suffix}"
+            if archive_candidate.is_file():
+                matches.append(
+                    DiscoveredObservation(
+                        archive_path=archive_candidate,
+                        date=observed_date,
+                        instrument=selected_instrument,
+                    )
+                )
+
+    if selected_instrument is Instrument.VIRUS:
+        for date_archive, observed_date in _selected_date_archives(
+            config.root, selected_date
+        ):
+            try:
+                with tarfile.open(date_archive, mode="r:*") as archive:
+                    members = archive.getmembers()
+            except (OSError, tarfile.TarError):
+                continue
+            for member in members:
+                if not member.isfile() or not _is_nested_virus_archive(member.name):
+                    continue
+                candidate = DiscoveredObservation(
+                    archive_path=date_archive,
+                    date=observed_date,
+                    instrument=selected_instrument,
+                    outer_tar_member=member.name,
+                )
+                if candidate.observation_id == requested_name:
+                    matches.append(candidate)
+
+    if not matches:
+        raise FileNotFoundError(
+            f"No {selected_instrument.value} observation {requested_name!r} "
+            f"found for date {selected_date.isoformat()} under {config.root}"
+        )
+    unique_matches = {
+        (
+            item.archive_path,
+            item.outer_tar_member,
+            item.instrument,
+            item.date,
+        ): item
+        for item in matches
+    }
+    if len(unique_matches) > 1:
+        locations = ", ".join(
+            f"{item.archive_path}"
+            + (f"::{item.outer_tar_member}" if item.outer_tar_member else "")
+            for item in unique_matches.values()
+        )
+        raise ValueError(
+            f"Observation {requested_name!r} is ambiguous; found: {locations}"
+        )
+    return next(iter(unique_matches.values()))

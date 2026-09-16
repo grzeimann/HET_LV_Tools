@@ -5,7 +5,7 @@ import tarfile
 import hetquicklook.discovery as discovery
 import pytest
 from hetquicklook.config import QuicklookConfig
-from hetquicklook.discovery import discover_observations
+from hetquicklook.discovery import discover_observation, discover_observations
 
 
 def test_discovery_reports_archives_without_completeness_checks(tmp_path: Path) -> None:
@@ -90,3 +90,59 @@ def test_discovery_reports_het_observation_directories(tmp_path: Path) -> None:
         ("virus", "virus0000001"),
     ]
     assert all(item.storage_backend == "directory" for item in observations)
+
+
+@pytest.mark.parametrize(
+    ("layout", "instrument", "observation_id"),
+    (
+        ("directory", "virus", "virus0000001"),
+        ("archive", "lrs2", "lrs20000001"),
+    ),
+)
+def test_targeted_discovery_resolves_one_named_observation(
+    tmp_path: Path,
+    layout: str,
+    instrument: str,
+    observation_id: str,
+) -> None:
+    instrument_root = tmp_path / "20260910" / instrument
+    instrument_root.mkdir(parents=True)
+    if layout == "directory":
+        source = instrument_root / observation_id
+        source.mkdir()
+    else:
+        source = instrument_root / f"{observation_id}.tar"
+        with tarfile.open(source, mode="w"):
+            pass
+
+    discovered = discover_observation(
+        QuicklookConfig(tmp_path),
+        instrument=instrument,
+        date="20260910",
+        observation_id=observation_id,
+    )
+
+    assert discovered.archive_path == source
+    assert discovered.observation_id == observation_id
+
+
+def test_targeted_discovery_resolves_nested_virus_date_tar(tmp_path: Path) -> None:
+    date_archive = tmp_path / "20260910.tar"
+    inner = io.BytesIO()
+    with tarfile.open(fileobj=inner, mode="w"):
+        pass
+    outer_member = "virus/virus0000001.tar"
+    with tarfile.open(date_archive, mode="w") as archive:
+        info = tarfile.TarInfo(outer_member)
+        info.size = len(inner.getvalue())
+        archive.addfile(info, io.BytesIO(inner.getvalue()))
+
+    discovered = discover_observation(
+        QuicklookConfig(tmp_path),
+        instrument="virus",
+        date="20260910",
+        observation_id="virus0000001",
+    )
+
+    assert discovered.archive_path == date_archive
+    assert discovered.outer_tar_member == outer_member

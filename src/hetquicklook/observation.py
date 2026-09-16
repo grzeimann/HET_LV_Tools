@@ -231,17 +231,68 @@ class Observation:
         discovered: DiscoveredObservation,
         *,
         standard_catalog: StandardStarCatalog | None = None,
+        exposure_id: str | None = None,
+        compact_headers: bool = False,
     ) -> "Observation":
-        """Inventory one archive and build exposure-level header metadata."""
+        """Inventory one archive and build exposure-level header metadata.
 
-        members = inventory_members(discovered)
+        ``exposure_id`` limits the inventory to one encoded exposure. When
+        ``compact_headers`` is true, one representative header is read per
+        exposure for LRS2 and per VIRUS IFU slot; the representative values
+        are applied to the other amplifier members in that group. The normal
+        full-observation path keeps reading every parsed member header.
+        """
+
+        members = inventory_members(discovered, exposure_id=exposure_id)
         parsed_frames = tuple(member for member in members if member.identity is not None)
-        header_results = RawFrameLoader().read_headers(parsed_frames)
+        header_members = parsed_frames
+        if compact_headers:
+            representatives: dict[tuple[str, str | None], ArchiveMember] = {}
+            for member in parsed_frames:
+                identity = member.identity
+                assert identity is not None
+                group_key = (
+                    identity.exposure_id,
+                    identity.ifu_slot
+                    if discovered.instrument.value == "virus"
+                    else None,
+                )
+                representatives.setdefault(group_key, member)
+            header_members = tuple(representatives.values())
+        header_results = RawFrameLoader().read_headers(header_members)
         headers_by_member = {
             result.member.member_name: result.header
             for result in header_results
             if result.header is not None
         }
+        representative_by_group: dict[tuple[str, str | None], ArchiveMember] = {}
+        if compact_headers:
+            for member in header_members:
+                identity = member.identity
+                assert identity is not None
+                representative_by_group[
+                    (
+                        identity.exposure_id,
+                        identity.ifu_slot
+                        if discovered.instrument.value == "virus"
+                        else None,
+                    )
+                ] = member
+
+        def header_for(member: ArchiveMember) -> Mapping[str, object] | None:
+            identity = member.identity
+            assert identity is not None
+            if compact_headers:
+                group_key = (
+                    identity.exposure_id,
+                    identity.ifu_slot
+                    if discovered.instrument.value == "virus"
+                    else None,
+                )
+                representative = representative_by_group[group_key]
+                return headers_by_member.get(representative.member_name)
+            return headers_by_member.get(member.member_name)
+
         groups: dict[str, list[ArchiveMember]] = {}
         for member in parsed_frames:
             identity = member.identity
@@ -257,9 +308,9 @@ class Observation:
                 if member.identity is not None
             )
             exposure_headers = {
-                member.member_name: headers_by_member[member.member_name]
+                member.member_name: header_for(member)
                 for member in frames
-                if member.member_name in headers_by_member
+                if header_for(member) is not None
             }
             exposure_metadata = exposure_metadata_from_headers(
                 exposure_id,
@@ -282,7 +333,7 @@ class Observation:
                 member.member_name: physical_identity_for(
                     discovered.instrument,
                     member.identity,
-                    headers_by_member.get(member.member_name),
+                    header_for(member),
                 )
                 for member in frames
                 if member.identity is not None
@@ -319,6 +370,46 @@ class Observation:
             metadata=metadata,
             exposures=tuple(exposures),
         )
+
+
+def load_selected_exposure(
+    discovered: DiscoveredObservation,
+    exposure_id: str | None = None,
+    *,
+    standard_catalog: StandardStarCatalog | None = None,
+) -> Observation:
+    """Load one exposure from a discovered observation.
+
+    If ``exposure_id`` is omitted, the first encoded exposure ID in the
+    selected observation is used. Only that exposure's FITS headers are read.
+    """
+
+    selected_id = None if exposure_id is None else str(exposure_id).strip()
+    if selected_id == "":
+        raise ValueError("exposure_id must not be empty")
+    if selected_id is None:
+        member_ids = {
+            member.identity.exposure_id
+            for member in inventory_members(discovered)
+            if member.identity is not None
+        }
+        if not member_ids:
+            raise ValueError(
+                f"Observation {discovered.observation_id!r} contains no parsed exposures"
+            )
+        selected_id = min(member_ids)
+    observation = Observation.from_discovered(
+        discovered,
+        standard_catalog=standard_catalog,
+        exposure_id=selected_id,
+        compact_headers=True,
+    )
+    if not observation.exposures:
+        raise KeyError(
+            f"Exposure {selected_id!r} was not found in observation "
+            f"{discovered.observation_id!r}"
+        )
+    return observation
 
 
 def load_observation(

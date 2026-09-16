@@ -26,6 +26,7 @@ from hetquicklook.workflows import (
     run_ldls_flat_quicklook,
     run_lrs2_channel_quicklooks,
     run_standard_star_quicklook,
+    run_virus_ifu_quicklooks,
     build_amplifier_topology,
 )
 from hetquicklook.algorithms.results import AlgorithmResult
@@ -787,6 +788,60 @@ def test_virus_archive_workflow_keeps_successful_amplifiers_when_one_fails(
     }
     assert set(ifu.unavailable_amplifiers) == {"095RU"}
     assert "trace geometry" in ifu.unavailable_amplifiers["095RU"]
+
+
+def test_virus_targeted_mode_retains_ifu_when_all_amplifiers_are_unavailable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    frames = []
+    identities = {}
+    for amplifier in ("LL", "LU", "RL", "RU"):
+        token = f"095{amplifier}"
+        identity = RawFrameIdentity("exp001", token, "twi")
+        member = ArchiveMember(
+            archive_path=tmp_path / "virus.tar",
+            member_name=f"exp001_{token}_twi.fits",
+            size=1,
+            identity=identity,
+        )
+        frames.append(member)
+        identities[member.member_name] = PhysicalAmplifierIdentity(
+            instrument=Instrument.VIRUS,
+            ifu_slot="095",
+            amplifier=amplifier,
+            ifuid="095",
+            specid="412",
+            controller="controller",
+        )
+    exposure = Exposure(
+        exposure_id="exp001",
+        frames=tuple(frames),
+        metadata=ExposureMetadata(
+            exposure_id="exp001", frame_types=("twi",), frame_class="calibration"
+        ),
+        classification=ExposureClassification(quicklook_kind="flat"),
+        physical_identities=identities,
+    )
+
+    def fail_run(*args, **kwargs):
+        raise QuicklookError("no matching flat amplifier")
+
+    monkeypatch.setattr(workflows, "_run_archive_amplifier_quicklook", fail_run)
+    result = run_virus_ifu_quicklooks(
+        exposure,
+        trace_root=tmp_path,
+        frame_type="twi",
+        allow_empty_ifus=True,
+    )
+
+    ifu = result.ifus["095"]
+    assert ifu.product is None
+    assert set(ifu.unavailable_amplifiers) == {
+        "095LL",
+        "095LU",
+        "095RL",
+        "095RU",
+    }
 
 
 def test_virus_workflow_composes_one_ifu_image_in_sorted_order(

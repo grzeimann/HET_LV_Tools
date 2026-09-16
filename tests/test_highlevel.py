@@ -270,6 +270,74 @@ def test_night_uses_previous_evening_unclassified_flat_frame(
     ] == ["flat"]
 
 
+def test_site_exposure_builds_targeted_context_without_night_inventory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = _observation(
+        tmp_path,
+        "lrs20000001",
+        [("target", "sci", "target")],
+        instrument=Instrument.LRS2,
+    )
+    flat = _observation(
+        tmp_path,
+        "lrs20000002",
+        [("flat", "flt", "ldls_long_B")],
+        instrument=Instrument.LRS2,
+    )
+    discovered = {
+        target.discovered.observation_id: target.discovered,
+        flat.discovered.observation_id: flat.discovered,
+    }
+    loaded = {
+        target.discovered.observation_id: target,
+        flat.discovered.observation_id: flat,
+    }
+
+    monkeypatch.setattr(
+        highlevel,
+        "discover_observation",
+        lambda _config, *, observation_id, **kwargs: discovered[observation_id],
+    )
+    monkeypatch.setattr(
+        highlevel,
+        "load_selected_exposure",
+        lambda item, exposure_id=None, **kwargs: loaded[item.observation_id],
+    )
+    calls = {}
+
+    def fake_run(exposure, **kwargs):
+        calls.update(kwargs)
+        return LRS2QuicklookSet(amplifier_evidence={}, channels={})
+
+    monkeypatch.setattr(
+        highlevel.workflows, "run_lrs2_channel_quicklooks", fake_run
+    )
+
+    site = QuicklookSite(raw_roots={"lrs2": tmp_path}, trace_root=tmp_path)
+    exposure = site.exposure(
+        "20260512",
+        instrument="lrs2",
+        quicklook_observation="lrs20000001",
+        quicklook_exposure="target",
+        flat_date="20260511",
+        flat_observation="lrs20000002",
+        flat_exposure="flat",
+    )
+    product = exposure.quicklook()
+
+    assert isinstance(product, QuicklookProduct)
+    assert exposure.night is None
+    assert exposure.row is None
+    assert exposure.instrument is Instrument.LRS2
+    assert exposure._context is not None
+    assert exposure._context.trace_provider._candidates == (
+        (flat.exposures[0], flat.discovered.date),
+    )
+    assert exposure._context.trace_provider._require_complete_flat_component is True
+    assert calls["trace_provider"] is exposure._context.trace_provider
+
+
 def test_previous_evening_flat_uses_exposure_id_when_header_date_disagrees(
     tmp_path: Path,
 ) -> None:
@@ -452,6 +520,37 @@ def test_virus_product_plot_without_ifu_uses_the_focal_plane_grid() -> None:
     single_image = single_figure.axes[0].images[0]
     assert single_image.get_cmap().name == "viridis"
     assert single_image.get_clim() == (0.0, 10.0)
+
+
+def test_virus_product_plot_skips_ifus_without_spatial_products() -> None:
+    available = SpatialQuicklook(
+        fiber_values={"fiber": 1.0},
+        image=np.array([[1.0, 2.0], [3.0, 4.0]]),
+        instrument=Instrument.VIRUS,
+        spatial_x_coordinates=np.array([-0.5, 0.5]),
+        spatial_y_coordinates=np.array([-0.5, 0.5]),
+    )
+    result = VIRUSQuicklookSet(
+        ifus={
+            "074": VIRUSIFUQuicklookSet(
+                ifu_slot="074", amplifier_evidence={}, product=available
+            ),
+            "075": VIRUSIFUQuicklookSet(
+                ifu_slot="075",
+                amplifier_evidence={},
+                product=None,
+                unavailable_amplifiers={"075LL": "no matching flat amplifier"},
+            ),
+        }
+    )
+
+    figure = QuicklookProduct.from_result(None, "target", result).plot(
+        show_fibers=False
+    )
+
+    axes_by_title = {axis.get_title(): axis for axis in figure.axes}
+    assert axes_by_title["074"].images
+    assert not axes_by_title["075"].images
 
 
 def test_exposure_id_lookup_rejects_ambiguity(tmp_path: Path) -> None:

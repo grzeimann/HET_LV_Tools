@@ -498,9 +498,11 @@ class _QuickTraceProvider:
         candidates: tuple[tuple["Exposure", date], ...],
         *,
         trace_root: str | Path,
+        require_complete_flat_component: bool = True,
     ) -> None:
         self._candidates = candidates
         self._trace_root = Path(trace_root)
+        self._require_complete_flat_component = bool(require_complete_flat_component)
         self._cache: dict[
             tuple[object, ...],
             tuple[AlgorithmResult, TopologyReference, "ArchiveMember"],
@@ -649,13 +651,16 @@ class _QuickTraceProvider:
             "flat_candidate_selection",
             timings is not None,
         ):
-            candidate, _ = self._select_candidate(
+            candidate, selected_frame = self._select_candidate(
                 target_exposure,
                 target_frame,
                 target_identity,
                 at=at,
             )
-            selected_frame = self._require_flat_component(candidate, target_identity)
+            if self._require_complete_flat_component:
+                selected_frame = self._require_flat_component(
+                    candidate, target_identity
+                )
         cache_key = (
             str(selected_frame.archive_path),
             selected_frame.outer_tar_member,
@@ -1757,12 +1762,15 @@ def run_virus_ifu_quicklooks(
     timing: bool = False,
     memory_check: bool = False,
     detailed_evidence: bool = False,
+    allow_empty_ifus: bool = False,
 ) -> VIRUSQuicklookSet:
     """Run filesystem-backed VIRUS amplifier quick looks and compose each IFU.
 
-    Each complete IFU returns one physical IFU-plane image built from all
-    four amplifier products. The individual amplifier evidence remains
-    available for diagnostics; no whole-VIRUS focal-plane image is inferred.
+    Each IFU returns one physical IFU-plane image built from the available
+    amplifier products. The individual amplifier evidence remains available
+    for diagnostics. Automatic callers retain fail-fast behavior when no
+    amplifier product can be composed; explicit targeted callers may keep
+    such an IFU as unavailable evidence.
     """
 
     exposure_instruments = {
@@ -1890,7 +1898,20 @@ def run_virus_ifu_quicklooks(
             )
 
         composition_timings: dict[str, float] = {}
-        with _timed_stage(composition_timings, "ifu_composition", timing):
+        if evidence:
+            with _timed_stage(composition_timings, "ifu_composition", timing):
+                product = _compose_virus_ifu_quicklook(
+                    evidence,
+                    ifu_slot=slot,
+                    gaussian_fwhm_arcsec=gaussian_fwhm_arcsec,
+                    pixel_scale_arcsec=pixel_scale_arcsec,
+                    grid_padding_arcsec=grid_padding_arcsec,
+                    output_shape=output_shape,
+                    origin=origin,
+                )
+        elif allow_empty_ifus:
+            product = None
+        else:
             product = _compose_virus_ifu_quicklook(
                 evidence,
                 ifu_slot=slot,
@@ -1912,7 +1933,7 @@ def run_virus_ifu_quicklooks(
         )
         retained_bytes = (
             sum(item.diagnostics.retained_array_bytes for item in evidence.values())
-            + (_spatial_array_bytes(product) if memory_check else 0)
+            + (_spatial_array_bytes(product) if memory_check and product is not None else 0)
         )
         peak_values = [
             item.diagnostics.peak_rss_bytes

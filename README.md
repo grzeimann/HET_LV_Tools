@@ -93,6 +93,12 @@ extracted spectra are needed for detailed inspection. See the
 [interactive quick-start guide](docs/quicklook.md) for evidence retention,
 instrument-specific products, and advanced inspection.
 
+When the observation and flat are already known from the night log, use
+`ql.exposure(...)` to build one targeted quick look without first creating a
+full night inventory. Supply the target date/observation/exposure and the flat
+date/observation/exposure; omitting the target exposure selects the first one
+in that observation. The notebook includes a runnable example.
+
 When the selected UT date has no flat frame, the high-level night lookup also
 searches the previous UT date for flat frames taken from 17:00 UT up to
 midnight. The filename frame type is used for this fallback even when an

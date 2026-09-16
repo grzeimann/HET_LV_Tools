@@ -4,6 +4,7 @@ from .config import QuicklookConfig
 from .discovery import (
     ArchiveMember,
     DiscoveredObservation,
+    discover_observation,
     RawFrameIdentity,
     discover_observations,
     inventory_members,
@@ -31,7 +32,12 @@ from .metadata import (
     metadata_from_header,
     metadata_from_members,
 )
-from .observation import Exposure, Observation, load_observation
+from .observation import (
+    Exposure,
+    Observation,
+    load_observation,
+    load_selected_exposure,
+)
 from .raw import HeaderReadResult, RawFrameData, RawFrameLoader, load_frame
 from .classification import (
     DEFAULT_STANDARD_STAR_CATALOG_SOURCE,
@@ -107,9 +113,11 @@ __all__ = [
     "RawFrameIdentity",
     "RawFrameLoader",
     "discover_observations",
+    "discover_observation",
     "inventory_members",
     "load_frame",
     "load_observation",
+    "load_selected_exposure",
     "lrs2_channel_for",
     "lrs2_channel_for_identity",
     "metadata_from_archive",

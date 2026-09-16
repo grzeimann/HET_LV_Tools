@@ -26,6 +26,35 @@ product = exposure.quicklook()
 product.plot()
 ```
 
+For a quick look at one observation without creating the full night table,
+provide the target and flat identifiers directly:
+
+```python
+exposure = ql.exposure(
+    "20260609",
+    instrument="virus",
+    quicklook_observation="virus0000006",
+    quicklook_exposure="20260609T031649.6",
+    flat_date="20260609",
+    flat_observation="virus0000021",
+    flat_exposure="20260609T233613.5",
+)
+product = exposure.quicklook()
+product.plot(cmap="coolwarm")
+```
+
+The target exposure may be omitted to use the first encoded exposure in the
+target observation. The flat date, observation, and exposure are always
+explicit in this mode, so they can come directly from the night log. The
+target and flat observations are resolved under only their specified
+`ROOT/DATE/instrument` trees, and only those two selected exposures are read.
+For VIRUS, the flat is matched to each target amplifier by its physical IFU
+identity. An amplifier with no match is retained in
+`product.ifus["074"].unavailable_amplifiers`; an IFU with no matched
+amplifiers is omitted from the full focal-plane plot. LRS2 keeps its complete
+channel requirement, so a missing component still produces a contextual
+error.
+
 Evaluating `LRS2Night` in Jupyter displays one compact row per encoded exposure,
 including exposures from multiple observation archives or directories. Rows use zero-based
 Python indexing, so `LRS2Night[19]` selects the row labelled `19`. The selected

@@ -6,7 +6,13 @@ import numpy as np
 import pytest
 from astropy.io import fits
 
-from hetquicklook import QuicklookConfig, discover_observations, load_observation
+from hetquicklook import (
+    QuicklookConfig,
+    discover_observations,
+    load_observation,
+    load_selected_exposure,
+)
+from hetquicklook.raw import RawFrameLoader
 
 
 def _fits_bytes(data: np.ndarray, object_name: str) -> bytes:
@@ -102,3 +108,45 @@ def test_observation_loads_het_directory_layout(
     assert loaded.tar_member == (
         f"exp01/{instrument}/20260910T010101.1_{amplifier_token}_twi.fits"
     )
+
+
+def test_selected_exposure_reads_only_one_exposure_and_compact_headers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "root"
+    observation_path = root / "20260910" / "virus" / "virus0000001"
+    first = observation_path / "exp01" / "virus" / "20260910T010101.1_074LL_twi.fits"
+    second = observation_path / "exp02" / "virus" / "20260910T010202.2_074LL_twi.fits"
+    first.parent.mkdir(parents=True)
+    second.parent.mkdir(parents=True)
+    first.write_bytes(_fits_bytes(np.array([[1]], dtype=np.uint16), "first"))
+    second.write_bytes(_fits_bytes(np.array([[2]], dtype=np.uint16), "second"))
+
+    discovered = discover_observations(
+        QuicklookConfig(root), instrument="virus", date="20260910"
+    )[0]
+    read_members: list[tuple[str, ...]] = []
+    original_read_headers = RawFrameLoader.read_headers
+
+    def record_read_headers(loader, members):
+        members = tuple(members)
+        read_members.append(tuple(member.member_name for member in members))
+        return original_read_headers(loader, members)
+
+    monkeypatch.setattr(RawFrameLoader, "read_headers", record_read_headers)
+    observation = load_selected_exposure(discovered, "20260910T010202.2")
+
+    assert observation.exposure_ids == ("20260910T010202.2",)
+    assert [member.member_name for member in observation.members] == [
+        "exp02/virus/20260910T010202.2_074LL_twi.fits"
+    ]
+    assert read_members == [
+        ("exp02/virus/20260910T010202.2_074LL_twi.fits",)
+    ]
+
+    first_observation = load_selected_exposure(discovered)
+    assert first_observation.exposure_ids == ("20260910T010101.1",)
+    assert read_members == [
+        ("exp02/virus/20260910T010202.2_074LL_twi.fits",),
+        ("exp01/virus/20260910T010101.1_074LL_twi.fits",),
+    ]
