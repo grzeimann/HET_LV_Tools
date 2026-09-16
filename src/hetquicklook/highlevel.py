@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from datetime import date, datetime, time as clock_time, timedelta
 from html import escape
@@ -21,11 +21,13 @@ from .discovery import (
     discover_observations,
 )
 from .instrument import Instrument
+from .metadata import ExposureMetadata
 from .observation import (
     Exposure,
     Observation,
     load_observation,
     load_selected_exposure,
+    summarize_observation,
 )
 from .raw import RawFrameLoader
 
@@ -43,6 +45,11 @@ _TABLE_COLUMNS = (
     "Exposure time [s]",
     "Program",
     "Amplifiers/components",
+)
+_SUMMARY_TABLE_COLUMNS = tuple(
+    column
+    for column in _TABLE_COLUMNS
+    if column not in {"IFU slot", "Amplifiers/components"}
 )
 _TABLE_SEQUENCE_LIMIT = 8
 _PREVIOUS_NIGHT_CALIBRATION_START_UT = clock_time(hour=17)
@@ -102,12 +109,16 @@ def _calibration_label(classification: ExposureClassification) -> str | None:
     return None
 
 
+def _is_flat_frame_types(frame_types: Iterable[object]) -> bool:
+    return {
+        str(value).strip().casefold() for value in frame_types
+    } == {"flt"}
+
+
 def _is_flat_frame(exposure: Exposure) -> bool:
     """Return whether all parsed members are encoded as flat frames."""
 
-    return {
-        str(value).strip().casefold() for value in exposure.metadata.frame_types
-    } == {"flt"}
+    return _is_flat_frame_types(exposure.metadata.frame_types)
 
 
 def _calendar_date(value: str | date) -> date:
@@ -197,6 +208,26 @@ def _exposure_row(row: int, observation: Observation, exposure: Exposure) -> dic
         "Exposure time [s]": metadata.exposure_time_s,
         "Program": metadata.program_id or metadata.qprog,
         "Amplifiers/components": exposure.amplifier_tokens,
+    }
+
+
+def _summary_exposure_row(exposure: "QuicklookSummaryExposure") -> dict[str, Any]:
+    metadata = exposure.metadata
+    classification = exposure.classification
+    return {
+        "Row": exposure.row,
+        "Observation": exposure.observation_id,
+        "Exposure ID": exposure.exposure_id,
+        "UTC/time": metadata.observation_time,
+        "Frame type": metadata.frame_type or metadata.frame_types,
+        "OBJECT": metadata.object_name,
+        "Quick-look kind": _classification_label(
+            classification,
+            flat_frame=_is_flat_frame_types(metadata.frame_types),
+        ),
+        "Calibration / standard": _calibration_label(classification),
+        "Exposure time [s]": metadata.exposure_time_s,
+        "Program": metadata.program_id or metadata.qprog,
     }
 
 
@@ -316,6 +347,50 @@ class QuicklookSite:
             _fallback_calibration_candidates=fallback_candidates,
         )
 
+    def night_summary(
+        self,
+        date: str | date,
+        *,
+        instrument: Instrument | str,
+    ) -> "QuicklookNightSummary":
+        """Build a header-light exposure summary for one observing date.
+
+        Discovery inventories filenames and reads one representative primary
+        FITS header per encoded exposure. Use the returned references with
+        :meth:`exposure` when the target and flat are known; call
+        :meth:`QuicklookNightSummary.night` when the full automatic night
+        workflow is needed.
+        """
+
+        parsed = Instrument.from_value(instrument)
+        discovered = discover_observations(
+            self.config_for(parsed), instrument=parsed, date=date
+        )
+        entries: list[QuicklookSummaryExposure] = []
+        for item in discovered:
+            for summary in summarize_observation(
+                item, standard_catalog=self.standard_catalog
+            ):
+                entries.append(
+                    QuicklookSummaryExposure(
+                        site=self,
+                        discovered=item,
+                        row=len(entries),
+                        exposure_id=summary.exposure_id,
+                        frame_count=summary.frame_count,
+                        metadata=summary.metadata,
+                        classification=summary.classification,
+                        header_error=summary.header_error,
+                    )
+                )
+        return QuicklookNightSummary(
+            site=self,
+            date=date,
+            instrument=parsed,
+            discovered=discovered,
+            exposures=tuple(entries),
+        )
+
     def exposure(
         self,
         quicklook_date: str | date,
@@ -385,6 +460,137 @@ class QuicklookSite:
             raw_exposure=target_exposure,
             row=None,
             _context=context,
+        )
+
+
+@dataclass(frozen=True)
+class QuicklookSummaryExposure:
+    """One row reference from a header-light night summary."""
+
+    site: QuicklookSite = field(repr=False, compare=False)
+    discovered: DiscoveredObservation = field(repr=False, compare=False)
+    row: int
+    exposure_id: str
+    frame_count: int
+    metadata: ExposureMetadata
+    classification: ExposureClassification
+    header_error: str | None = None
+
+    @property
+    def observation_id(self) -> str:
+        """Return the source observation identifier for this row."""
+
+        return self.discovered.observation_id
+
+    @property
+    def date(self) -> date:
+        """Return the observing date recorded by discovery."""
+
+        return self.discovered.date
+
+    @property
+    def instrument(self) -> Instrument:
+        """Return the instrument recorded by discovery."""
+
+        return self.discovered.instrument
+
+    @property
+    def kind(self) -> str:
+        """Return the same display classification used by full night rows."""
+
+        return _classification_label(
+            self.classification,
+            flat_frame=_is_flat_frame_types(self.metadata.frame_types),
+        )
+
+    def __repr__(self) -> str:
+        return (
+            f"QuicklookSummaryExposure(row={self.row}, "
+            f"observation_id={self.observation_id!r}, "
+            f"exposure_id={self.exposure_id!r})"
+        )
+
+
+@dataclass(frozen=True)
+class QuicklookNightSummary:
+    """Fast exposure inventory backed by one representative header per exposure."""
+
+    site: QuicklookSite
+    date: str | date
+    instrument: Instrument
+    discovered: tuple[DiscoveredObservation, ...]
+    exposures: tuple[QuicklookSummaryExposure, ...]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "instrument", Instrument.from_value(self.instrument))
+
+    def __len__(self) -> int:
+        return len(self.exposures)
+
+    def __iter__(self) -> Iterator[QuicklookSummaryExposure]:
+        return iter(self.exposures)
+
+    def __getitem__(
+        self, index: int | slice
+    ) -> QuicklookSummaryExposure | tuple[QuicklookSummaryExposure, ...]:
+        return self.exposures[index]
+
+    def exposure(self, exposure_id: str) -> QuicklookSummaryExposure:
+        """Find a summary row by encoded ID, rejecting archive ambiguity."""
+
+        matches = [item for item in self.exposures if item.exposure_id == exposure_id]
+        if not matches:
+            raise KeyError(exposure_id)
+        if len(matches) > 1:
+            observations = ", ".join(item.observation_id for item in matches)
+            raise ValueError(
+                f"Exposure ID {exposure_id!r} is ambiguous across observations: "
+                f"{observations}"
+            )
+        return matches[0]
+
+    def night(self) -> "QuicklookNight":
+        """Materialize the existing full automatic night workflow."""
+
+        return self.site.night(self.date, instrument=self.instrument)
+
+    def _repr_html_(self) -> str:
+        """Render the reduced exposure summary for Jupyter."""
+
+        header = "".join(
+            f"<th style='border:1px solid #bbb;padding:4px 6px;text-align:left'>"
+            f"{escape(column)}</th>"
+            for column in _SUMMARY_TABLE_COLUMNS
+        )
+        body: list[str] = []
+        for exposure in self.exposures:
+            row = _summary_exposure_row(exposure)
+            cells = "".join(
+                "<td style='border:1px solid #bbb;padding:4px 6px'>"
+                f"{escape(_display_value(row[column]))}</td>"
+                for column in _SUMMARY_TABLE_COLUMNS
+            )
+            body.append(f"<tr>{cells}</tr>")
+        if not body:
+            body.append(
+                f"<tr><td colspan='{len(_SUMMARY_TABLE_COLUMNS)}' "
+                "style='padding:6px'>No exposures discovered.</td></tr>"
+            )
+        caption = (
+            f"{self.instrument.value.upper()} {escape(_display_value(self.date))}: "
+            f"{len(self)} exposure(s)"
+        )
+        return (
+            f"<p><strong>{caption}</strong></p>"
+            "<div style='overflow-x:auto'><table style='border-collapse:collapse'>"
+            f"<thead><tr>{header}</tr></thead>"
+            f"<tbody>{''.join(body)}</tbody></table></div>"
+        )
+
+    def __repr__(self) -> str:
+        return (
+            f"QuicklookNightSummary(date={self.date!r}, "
+            f"instrument={self.instrument.value!r}, exposures={len(self)})"
         )
 
 

@@ -99,6 +99,12 @@ full night inventory. Supply the target date/observation/exposure and the flat
 date/observation/exposure; omitting the target exposure selects the first one
 in that observation. The notebook includes a runnable example.
 
+For a fast exposure inventory, use `ql.night_summary(...)`. It reads one
+representative FITS header per exposure and leaves out the IFU and amplifier
+columns. Summary rows retain the exact observation and exposure IDs needed by
+`ql.exposure(...)`; call `summary.night()` when the full automatic night
+workflow is needed.
+
 When the selected UT date has no flat frame, the high-level night lookup also
 searches the previous UT date for flat frames taken from 17:00 UT up to
 midnight. The filename frame type is used for this fallback even when an

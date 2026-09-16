@@ -83,8 +83,10 @@ from .highlevel import (
     QuicklookExposure,
     QuicklookIFU,
     QuicklookNight,
+    QuicklookNightSummary,
     QuicklookProduct,
     QuicklookSite,
+    QuicklookSummaryExposure,
 )
 
 __all__ = [
@@ -105,6 +107,8 @@ __all__ = [
     "QuicklookConfig",
     "QuicklookSite",
     "QuicklookNight",
+    "QuicklookNightSummary",
+    "QuicklookSummaryExposure",
     "QuicklookExposure",
     "QuicklookProduct",
     "QuicklookIFU",

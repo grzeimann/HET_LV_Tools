@@ -13,6 +13,7 @@ from hetquicklook import (
     load_selected_exposure,
 )
 from hetquicklook.raw import RawFrameLoader
+from hetquicklook.observation import summarize_observation
 
 
 def _fits_bytes(data: np.ndarray, object_name: str) -> bytes:
@@ -149,4 +150,52 @@ def test_selected_exposure_reads_only_one_exposure_and_compact_headers(
     assert read_members == [
         ("exp02/virus/20260910T010202.2_074LL_twi.fits",),
         ("exp01/virus/20260910T010101.1_074LL_twi.fits",),
+    ]
+
+
+def test_observation_summary_reads_one_representative_header_per_exposure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "root"
+    observation_path = root / "20260910" / "virus" / "virus0000001"
+    members = (
+        observation_path / "exp01" / "virus" / "20260910T010101.1_074LL_sci.fits",
+        observation_path / "exp01" / "virus" / "20260910T010101.1_074LU_sci.fits",
+        observation_path / "exp02" / "virus" / "20260910T010202.2_074LL_sci.fits",
+        observation_path / "exp02" / "virus" / "20260910T010202.2_074LU_sci.fits",
+    )
+    for index, member in enumerate(members, start=1):
+        member.parent.mkdir(parents=True, exist_ok=True)
+        member.write_bytes(_fits_bytes(np.array([[index]], dtype=np.uint16), f"target-{index}"))
+
+    discovered = discover_observations(
+        QuicklookConfig(root), instrument="virus", date="20260910"
+    )[0]
+    read_members: list[tuple[str, ...]] = []
+    original_read_headers = RawFrameLoader.read_headers
+
+    def record_read_headers(loader, requested_members):
+        requested_members = tuple(requested_members)
+        read_members.append(
+            tuple(member.member_name for member in requested_members)
+        )
+        return original_read_headers(loader, requested_members)
+
+    monkeypatch.setattr(RawFrameLoader, "read_headers", record_read_headers)
+    summaries = summarize_observation(discovered)
+
+    assert [summary.exposure_id for summary in summaries] == [
+        "20260910T010101.1",
+        "20260910T010202.2",
+    ]
+    assert [summary.frame_count for summary in summaries] == [2, 2]
+    assert [summary.metadata.object_name for summary in summaries] == [
+        "target-1",
+        "target-3",
+    ]
+    assert read_members == [
+        (
+            "exp01/virus/20260910T010101.1_074LL_sci.fits",
+            "exp02/virus/20260910T010202.2_074LL_sci.fits",
+        )
     ]

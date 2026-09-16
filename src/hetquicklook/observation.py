@@ -71,6 +71,17 @@ class Exposure:
 
 
 @dataclass(frozen=True)
+class _ExposureSummary:
+    """Header-light representation used by the high-level night summary."""
+
+    exposure_id: str
+    frame_count: int
+    metadata: ExposureMetadata
+    classification: ExposureClassification
+    header_error: str | None = None
+
+
+@dataclass(frozen=True)
 class Observation:
     """The source evidence and basic metadata for one observation.
 
@@ -410,6 +421,84 @@ def load_selected_exposure(
             f"{discovered.observation_id!r}"
         )
     return observation
+
+
+def summarize_observation(
+    discovered: DiscoveredObservation,
+    *,
+    standard_catalog: StandardStarCatalog | None = None,
+) -> tuple[_ExposureSummary, ...]:
+    """Summarize exposures with one representative FITS header each.
+
+    Filename identities provide the exposure grouping and frame types. One
+    deterministic representative member per exposure supplies the optional
+    header metadata; detector arrays and per-amplifier physical identities are
+    intentionally left for the full loading path.
+    """
+
+    members = inventory_members(discovered)
+    parsed_frames = tuple(member for member in members if member.identity is not None)
+    groups: dict[str, list[ArchiveMember]] = {}
+    for member in parsed_frames:
+        identity = member.identity
+        assert identity is not None
+        groups.setdefault(identity.exposure_id, []).append(member)
+
+    representatives = tuple(groups[exposure_id][0] for exposure_id in sorted(groups))
+    header_results = RawFrameLoader().read_headers(representatives)
+    headers_by_member = {
+        result.member.member_name: result.header
+        for result in header_results
+        if result.header is not None
+    }
+    errors_by_member = {
+        result.member.member_name: result.error
+        for result in header_results
+        if result.error is not None
+    }
+
+    summaries: list[_ExposureSummary] = []
+    for exposure_id in sorted(groups):
+        frames = tuple(groups[exposure_id])
+        frame_types = tuple(
+            member.identity.frame_type
+            for member in frames
+            if member.identity is not None
+        )
+        representative = groups[exposure_id][0]
+        representative_header = headers_by_member.get(representative.member_name)
+        exposure_headers = (
+            {representative.member_name: representative_header}
+            if representative_header is not None
+            else {}
+        )
+        metadata = exposure_metadata_from_headers(
+            exposure_id,
+            frame_types,
+            exposure_headers,
+        )
+        slots = tuple(
+            member.identity.ifu_slot
+            for member in frames
+            if member.identity is not None
+        )
+        classification = classify_exposure(
+            discovered.instrument,
+            frame_types=frame_types,
+            object_name=metadata.object_name,
+            ifu_slots=slots,
+            standard_catalog=standard_catalog,
+        )
+        summaries.append(
+            _ExposureSummary(
+                exposure_id=exposure_id,
+                frame_count=len(frames),
+                metadata=metadata,
+                classification=classification,
+                header_error=errors_by_member.get(representative.member_name),
+            )
+        )
+    return tuple(summaries)
 
 
 def load_observation(

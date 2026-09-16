@@ -1,6 +1,7 @@
 from datetime import date, datetime
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -115,6 +116,53 @@ def test_site_normalizes_roots_and_night_flattens_exposures(
     assert [item.row for item in night] == [0, 1, 2]
     assert night[1].observation.observation_id == "obs-1"
     assert night[1].metadata.object_name == "target-b"
+
+
+def test_site_night_summary_reads_summary_rows_without_full_observation_loading(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    observation = _observation(
+        tmp_path,
+        "obs-1",
+        [("exp-2", "sci", "target"), ("exp-1", "flt", "flat")],
+    )
+    discovered = (observation.discovered,)
+    summaries = tuple(
+        SimpleNamespace(
+            exposure_id=item.exposure_id,
+            frame_count=4 if item.exposure_id == "exp-1" else 8,
+            metadata=item.metadata,
+            classification=item.classification,
+            header_error=None,
+        )
+        for item in reversed(observation.exposures)
+    )
+    monkeypatch.setattr(
+        highlevel, "discover_observations", lambda *args, **kwargs: discovered
+    )
+    monkeypatch.setattr(
+        highlevel,
+        "summarize_observation",
+        lambda *args, **kwargs: summaries,
+    )
+    monkeypatch.setattr(
+        highlevel,
+        "load_observation",
+        lambda *args, **kwargs: pytest.fail("night_summary loaded a full observation"),
+    )
+
+    site = QuicklookSite(raw_roots={"lrs2": tmp_path}, trace_root=tmp_path)
+    summary = site.night_summary("20260512", instrument="lrs2")
+
+    assert [item.exposure_id for item in summary] == ["exp-1", "exp-2"]
+    assert [item.row for item in summary] == [0, 1]
+    assert summary[0].observation_id == "obs-1"
+    assert summary[0].instrument is Instrument.LRS2
+    assert summary[0].frame_count == 4
+    assert summary.exposure("exp-2").row == 1
+    html = summary._repr_html_()
+    assert "IFU slot" not in html
+    assert "Amplifiers/components" not in html
 
 
 def test_site_default_trace_root_is_independent_of_working_directory(

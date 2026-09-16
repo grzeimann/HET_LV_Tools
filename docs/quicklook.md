@@ -26,6 +26,35 @@ product = exposure.quicklook()
 product.plot()
 ```
 
+When the table is only being used to find target and flat rows, use the
+header-light summary. It inventories filenames and reads one representative
+FITS header per exposure, so it avoids opening every amplifier header:
+
+```python
+summary = ql.night_summary("20260609", instrument="virus")
+summary
+
+target = summary[5]
+flat = summary[24]
+exposure = ql.exposure(
+    target.date,
+    instrument=target.instrument,
+    quicklook_observation=target.observation_id,
+    quicklook_exposure=target.exposure_id,
+    flat_date=flat.date,
+    flat_observation=flat.observation_id,
+    flat_exposure=flat.exposure_id,
+)
+product = exposure.quicklook()
+product.plot(cmap="coolwarm")
+```
+
+The summary omits IFU slot and amplifier columns because those are not needed
+to identify a row. The row reference still retains the full canonical
+timestamp exposure ID. Use `summary.night()` to materialize the existing full
+automatic night workflow when automatic flat selection or complete metadata
+is needed.
+
 For a quick look at one observation without creating the full night table,
 provide the target and flat identifiers directly:
 
