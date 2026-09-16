@@ -3,7 +3,16 @@
 The high-level API is the normal entry point for an interactive notebook. It
 keeps archive or directory discovery, exposure bookkeeping, detector
 preparation, trace resolution, topology construction, and instrument-specific
-presentation behind a small set of orchestration objects.
+presentation behind a small set of orchestration objects. It has two ways to
+inventory a night: full night mode with `ql.night(...)`, and header-light
+summary mode with `ql.night_summary(...)`.
+
+## Full night mode
+
+Use `ql.night(...)` when you want the complete selected-night inventory and
+automatic flat selection. It loads the observations and all encoded exposures,
+keeps the full IFU/amplifier metadata, and builds the flat candidate pool used
+by automatic quick-look dispatch.
 
 ```python
 from hetquicklook import QuicklookSite
@@ -26,9 +35,19 @@ product = exposure.quicklook()
 product.plot()
 ```
 
-When the table is only being used to find target and flat rows, use the
-header-light summary. It inventories filenames and reads one representative
-FITS header per exposure, so it avoids opening every amplifier header:
+If the selected UT date has no flat frame, full mode searches the previous UT
+date for flat frames observed from 17:00 UT through midnight. Those flats are
+available to automatic target and standard-star quick looks, but they are not
+added to the displayed table. Run `LRS2Night.update()` when new archives arrive
+to refresh the existing full-mode object in place.
+
+## Summary mode
+
+When the table is mainly being used to find a target and a flat, use
+`ql.night_summary(...)`. It inventories filenames and reads one representative
+FITS header per exposure, so it avoids opening every amplifier header. This
+mode is for manual selection: it does not choose a flat or build the full
+automatic flat candidate pool.
 
 ```python
 summary = ql.night_summary("20260609", instrument="virus")
@@ -51,9 +70,38 @@ product.plot(cmap="coolwarm")
 
 The summary omits IFU slot and amplifier columns because those are not needed
 to identify a row. The row reference still retains the full canonical
-timestamp exposure ID. Use `summary.night()` to materialize the existing full
-automatic night workflow when automatic flat selection or complete metadata
-is needed.
+timestamp exposure ID. Use `summary.night()` to materialize full mode for that
+date when automatic flat selection or complete metadata is needed.
+
+The summary covers one UT date. If no suitable flat appears in that table,
+create another summary for a candidate calibration night and inspect both
+tables. Then pass the manually selected target and flat rows to
+`ql.exposure(...)`; their dates may differ:
+
+```python
+target_summary = ql.night_summary("20260609", instrument="virus")
+flat_summary = ql.night_summary("20260608", instrument="virus")
+target_summary
+flat_summary
+
+target = target_summary[14]  # choose the target row manually
+flat = flat_summary[24]      # replace with a row marked "flat" in this table
+exposure = ql.exposure(
+    target.date,
+    instrument=target.instrument,
+    quicklook_observation=target.observation_id,
+    quicklook_exposure=target.exposure_id,
+    flat_date=flat.date,
+    flat_observation=flat.observation_id,
+    flat_exposure=flat.exposure_id,
+)
+product = exposure.quicklook()
+product.plot(cmap="coolwarm")
+```
+
+For LRS-2, flat calibration is slot-specific. A target spanning multiple slots
+may need full mode or flat choices that cover each slot because the targeted
+call accepts one explicit flat exposure.
 
 For a quick look at one observation without creating the full night table,
 provide the target and flat identifiers directly:
@@ -74,8 +122,9 @@ product.plot(cmap="coolwarm")
 
 The target exposure may be omitted to use the first encoded exposure in the
 target observation. The flat date, observation, and exposure are always
-explicit in this mode, so they can come directly from the night log. The
-target and flat observations are resolved under only their specified
+explicit in targeted mode, so they can come directly from the night log or
+from manually selected summary rows. The target and flat observations are
+resolved under only their specified
 `ROOT/DATE/instrument` trees, and only those two selected exposures are read.
 For VIRUS, the flat is matched to each target amplifier by its physical IFU
 identity. An amplifier with no match is retained in
@@ -95,15 +144,6 @@ LDLS or Qth flats use the flat workflow, catalog-matched standard stars use the
 standard-star workflow, and all other frame types use the target workflow for
 spatial inspection. An expert may use `exposure.quicklook(kind="flat")`,
 `kind="standard"`, or `kind="target"` when an explicit override is appropriate.
-
-If the selected UT date contains no flat frame, `QuicklookSite.night()` also
-searches the previous UT date for flat frames with observation times from
-17:00 UT through 23:59:59 UT. The filename frame type is used for this
-fallback even when an archive's `OBJECT` label is missing or unfamiliar;
-recognized LRS2 labels retain their slot-specific calibration rules. These
-previous-evening flats are added to the trace candidate pool for current-date
-standard-star and target quick looks; they are not added to the displayed
-exposure table.
 
 When a date is supplied, as it is through `QuicklookSite.night()`, discovery
 only enters the selected `ROOT/DATE` tree. If the selected tree has no flat
